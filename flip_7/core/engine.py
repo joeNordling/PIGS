@@ -443,6 +443,10 @@ class GameEngine:
                 effect_description=f"{player_name} was frozen and banked {player_state.round_score} points"
             ))
 
+            # Check if round should end (fixes softlock when last player gets frozen)
+            if check_round_end_condition(self.game_state.current_round):
+                self.end_round()
+
         elif card.action_type == ActionType.FLIP_THREE:
             # Player must take next 3 cards
             player_state.flip_three_active = True
