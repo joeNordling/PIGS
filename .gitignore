@@ -29,5 +29,6 @@ ENV/
 .idea/
 *.swp
 *.swo
+.DS_Store
 
 CLAUDE.md
