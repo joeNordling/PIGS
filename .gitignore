@@ -1,0 +1,33 @@
+# Local game history persisted by Flip7Tracker
+flip7_state.json
+flip7_games/
+
+# Python cache directories
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+CLAUDE.md
