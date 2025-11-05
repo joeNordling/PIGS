@@ -37,10 +37,12 @@ def calculate_score(cards: List[Card]) -> ScoreBreakdown:
     Calculate the score for a set of cards following Flip 7 rules.
 
     Scoring rules:
-    1. Add up all Number card values
-    2. Add bonus points from PLUS_X modifier cards
-    3. If x2 modifier card present, double the number card total
+    1. Add up all Number card values (base_score)
+    2. Add bonus points from PLUS_X modifier cards (bonus_points)
+    3. If x2 modifier card present, double ONLY the base_score (not bonus points)
     4. If player has exactly 7 Number cards, add 15 bonus points
+
+    Final formula: (base_score * multiplier) + bonus_points + flip_7_bonus
 
     Args:
         cards: List of cards to score
@@ -72,8 +74,9 @@ def calculate_score(cards: List[Card]) -> ScoreBreakdown:
     flip_7_bonus = FLIP_7_BONUS_POINTS if has_flip_7 else 0
 
     # Calculate final score
-    # Formula: (base_score + bonus_points) * multiplier + flip_7_bonus
-    final_score = (base_score + bonus_points) * multiplier + flip_7_bonus
+    # Formula: (base_score * multiplier) + bonus_points + flip_7_bonus
+    # Note: Multiplier only applies to base cards, NOT to bonus points
+    final_score = (base_score * multiplier) + bonus_points + flip_7_bonus
 
     return ScoreBreakdown(
         base_score=base_score,
