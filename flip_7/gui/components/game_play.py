@@ -256,17 +256,21 @@ def _show_player_card(player_info, player_state, engine):
         # Card picker dialog
         if st.session_state.get(f'dealing_to_{player_info.player_id}', False):
             with st.expander(f"🎴 Select Card for {player_info.name}", expanded=True):
-                selected_card = show_card_picker(player_info.name)
+                selected_card = show_card_picker(
+                    player_info.name,
+                    player_info.player_id,
+                    player_state.cards_in_hand
+                )
 
-                col1, col2 = st.columns(2)
-
-                with col1:
-                    if st.button("❌ Cancel", key=f"cancel_deal_{player_info.player_id}"):
+                # Handle single-select mode (cancel button handled by card picker for multi-select)
+                if selected_card is not None:
+                    # Check if it's a list (multi-select) or single card
+                    if isinstance(selected_card, list):
+                        # Multi-select: deal cards sequentially
                         st.session_state[f'dealing_to_{player_info.player_id}'] = False
-                        st.rerun()
-
-                with col2:
-                    if selected_card is not None:
+                        _deal_multiple_cards_sequentially(engine, player_info, selected_card)
+                    else:
+                        # Single-select: deal immediately
                         try:
                             engine.deal_card_to_player(player_info.player_id, selected_card)
                             st.session_state[f'dealing_to_{player_info.player_id}'] = False
@@ -274,6 +278,12 @@ def _show_player_card(player_info, player_state, engine):
                             st.rerun()
                         except ValueError as e:
                             st.error(f"Error dealing card: {e}")
+
+                # Cancel button for single-select mode
+                if not isinstance(selected_card, list) and selected_card is None:
+                    if st.button("❌ Cancel", key=f"cancel_deal_{player_info.player_id}"):
+                        st.session_state[f'dealing_to_{player_info.player_id}'] = False
+                        st.rerun()
 
         # Second Chance dialog
         if st.session_state.get(f'second_chance_{player_info.player_id}', False):
@@ -326,3 +336,65 @@ def _auto_save_game():
             repo.save_game(st.session_state.game_state, st.session_state.event_logger)
         except Exception:
             pass  # Silently fail auto-save
+
+
+def _deal_multiple_cards_sequentially(engine, player_info, cards):
+    """
+    Deal multiple cards to a player sequentially with progress feedback.
+
+    Args:
+        engine: GameEngine instance
+        player_info: PlayerInfo object for the player
+        cards: List of Card objects to deal
+    """
+    success_count = 0
+    total_cards = len(cards)
+
+    with st.container():
+        st.markdown(f"### 🎴 Dealing {total_cards} card{'s' if total_cards != 1 else ''} to {player_info.name}...")
+
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+
+        for i, card in enumerate(cards):
+            try:
+                # Deal the card
+                engine.deal_card_to_player(player_info.player_id, card)
+                success_count += 1
+
+                # Update progress
+                progress = (i + 1) / total_cards
+                progress_bar.progress(progress)
+                status_text.success(f"✅ Dealt {get_card_display(card)} ({i + 1}/{total_cards})")
+
+                # Check if player busted or game state changed
+                game_state = st.session_state.game_state
+                if game_state.current_round is None:
+                    # Round ended (e.g., FREEZE card on last player)
+                    st.info(f"Round ended after dealing {success_count} card{'s' if success_count != 1 else ''}")
+                    break
+
+                player_state = game_state.current_round.player_states.get(player_info.player_id)
+                if player_state and player_state.is_busted:
+                    st.warning(f"💥 Player busted after {success_count} card{'s' if success_count != 1 else ''}! Stopping early.")
+                    break
+
+                if player_state and player_state.has_stayed:
+                    st.info(f"Player stayed (FREEZE card) after {success_count} card{'s' if success_count != 1 else ''}! Stopping early.")
+                    break
+
+            except ValueError as e:
+                st.error(f"❌ Error dealing {get_card_display(card)}: {e}")
+                break
+
+        # Final summary
+        if success_count == total_cards:
+            st.success(f"🎉 Successfully dealt all {total_cards} card{'s' if total_cards != 1 else ''} to {player_info.name}!")
+        elif success_count > 0:
+            st.warning(f"⚠️ Dealt {success_count} of {total_cards} cards before stopping")
+        else:
+            st.error(f"❌ Failed to deal any cards")
+
+        # Add a rerun button
+        if st.button("✅ Continue", key=f"continue_after_multi_deal_{player_info.player_id}", type="primary"):
+            st.rerun()
