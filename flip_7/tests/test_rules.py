@@ -41,15 +41,15 @@ class TestScoreCalculation:
         cards = [
             NumberCard(value=12),
             NumberCard(value=11),
-            ModifierCard(modifier_type=ModifierType.PLUS_5, value=5)
+            ModifierCard(modifier_type=ModifierType.PLUS_4, value=4)
         ]
 
         breakdown = calculate_score(cards)
 
         assert breakdown.base_score == 23
-        assert breakdown.bonus_points == 5
+        assert breakdown.bonus_points == 4
         assert breakdown.multiplier == 1
-        assert breakdown.final_score == 28  # (23 + 5) * 1
+        assert breakdown.final_score == 27  # (23 + 4) * 1
 
     def test_score_with_multiplier(self):
         """Test scoring with x2 multiplier."""
@@ -180,7 +180,7 @@ class TestFlip7Detection:
             NumberCard(value=10),
             NumberCard(value=10),
             NumberCard(value=10),
-            ModifierCard(modifier_type=ModifierType.PLUS_5, value=5)
+            ModifierCard(modifier_type=ModifierType.PLUS_4, value=4)
         ]
         assert check_flip_7(cards) is True
 
@@ -393,14 +393,14 @@ class TestComplexScenarios:
     def test_only_modifier_cards(self):
         """Test scoring with only modifier cards (no number cards)."""
         cards = [
-            ModifierCard(modifier_type=ModifierType.PLUS_5, value=5),
+            ModifierCard(modifier_type=ModifierType.PLUS_4, value=4),
             ModifierCard(modifier_type=ModifierType.MULTIPLY_2, value=2)
         ]
 
         breakdown = calculate_score(cards)
 
-        # (0 + 5) * 2 = 10
-        assert breakdown.final_score == 10
+        # (0 + 4) * 2 = 8
+        assert breakdown.final_score == 8
 
 
 class TestRoundEndCondition:

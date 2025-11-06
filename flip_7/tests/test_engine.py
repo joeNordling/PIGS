@@ -134,7 +134,8 @@ class TestCardDealing:
 
         player_state = game_state.current_round.player_states[player_id]
         assert len(player_state.cards_in_hand) == 1
-        assert player_state.cards_in_hand[0] == card
+        assert isinstance(player_state.cards_in_hand[0], NumberCard)
+        assert player_state.cards_in_hand[0].value == card.value
 
     def test_deal_card_decrements_deck(self):
         """Test that dealing a card decrements deck count."""
@@ -257,16 +258,17 @@ class TestPlayerActions:
 
         # Deal Second Chance card and two duplicates
         engine.deal_card_to_player(player_id, ActionCard(action_type=ActionType.SECOND_CHANCE))
-        card1 = NumberCard(value=12)
-        card2 = NumberCard(value=12)
-        engine.deal_card_to_player(player_id, card1)
-        engine.deal_card_to_player(player_id, card2)
+        engine.deal_card_to_player(player_id, NumberCard(value=12))
+        engine.deal_card_to_player(player_id, NumberCard(value=12))
 
         player_state = game_state.current_round.player_states[player_id]
         initial_card_count = len(player_state.cards_in_hand)
 
+        # Get the actual card from player's hand (not the one we created)
+        duplicate_card = next(c for c in player_state.cards_in_hand if isinstance(c, NumberCard))
+
         # Use Second Chance
-        engine.use_second_chance(player_id, card1)
+        engine.use_second_chance(player_id, duplicate_card)
 
         # Should have removed both the duplicate and Second Chance card
         assert len(player_state.cards_in_hand) == initial_card_count - 2
@@ -276,8 +278,8 @@ class TestPlayerActions:
 class TestBustDetection:
     """Test bust detection and handling."""
 
-    def test_player_bust_over_200(self):
-        """Test that player busts when exceeding 200 total."""
+    def test_player_bust_with_duplicates(self):
+        """Test that player busts when getting duplicate cards."""
         engine = GameEngine()
         game_state = engine.start_new_game(["Alice", "Bob"])
         engine.start_new_round()
@@ -285,15 +287,13 @@ class TestBustDetection:
         player_id = game_state.players[0].player_id
         player_state = game_state.current_round.player_states[player_id]
 
-        # Set total score to 180
-        player_state.total_score = 180
+        # Deal duplicate cards (two cards with value 12)
+        engine.deal_card_to_player(player_id, NumberCard(value=12))
+        engine.deal_card_to_player(player_id, NumberCard(value=12))
 
-        # Deal cards that would push over 200
-        for _ in range(7):
-            engine.deal_card_to_player(player_id, NumberCard(value=12))
-
-        # Player should be busted
+        # Player should be busted due to duplicates
         assert player_state.is_busted is True
+        assert player_state.round_score == 0
 
     def test_bust_event_logged(self):
         """Test that bust event is logged."""
@@ -302,13 +302,10 @@ class TestBustDetection:
         engine.start_new_round()
 
         player_id = game_state.players[0].player_id
-        player_state = game_state.current_round.player_states[player_id]
 
-        # Set up for bust
-        player_state.total_score = 180
-
-        for _ in range(7):
-            engine.deal_card_to_player(player_id, NumberCard(value=12))
+        # Deal duplicate cards to cause a bust
+        engine.deal_card_to_player(player_id, NumberCard(value=11))
+        engine.deal_card_to_player(player_id, NumberCard(value=11))
 
         # Check for bust event
         bust_events = engine.get_event_logger().get_events(event_type=EventType.PLAYER_BUSTED)
@@ -324,11 +321,10 @@ class TestBustDetection:
         bob_id = game_state.players[1].player_id
         charlie_id = game_state.players[2].player_id
 
-        # Alice busts
+        # Alice busts with duplicate cards
         alice_state = game_state.current_round.player_states[alice_id]
-        alice_state.total_score = 180
-        for _ in range(7):
-            engine.deal_card_to_player(alice_id, NumberCard(value=12))
+        engine.deal_card_to_player(alice_id, NumberCard(value=10))
+        engine.deal_card_to_player(alice_id, NumberCard(value=10))
 
         # Alice should be busted
         assert alice_state.is_busted is True
@@ -398,16 +394,17 @@ class TestGameCompletion:
         game_state = engine.start_new_game(["Alice", "Bob"])
 
         # Play rounds until someone reaches 200
-        for round_num in range(5):
+        # Give Alice 33 points per round (12+11+10), needs ~7 rounds to reach 200
+
+        for round_num in range(10):
             engine.start_new_round()
 
-            # Give Alice high scores
+            # Give Alice high score each round
             alice_id = game_state.players[0].player_id
-
-            # Deal 7 cards with value 12 for Flip 7 bonus
-            for _ in range(7):
-                engine.deal_card_to_player(alice_id, NumberCard(value=12))
-
+            engine.deal_card_to_player(alice_id, NumberCard(value=12))
+            engine.deal_card_to_player(alice_id, NumberCard(value=11))
+            engine.deal_card_to_player(alice_id, NumberCard(value=10))
+            # This gives 33 points per round
             engine.player_stay(alice_id)
 
             # Give Bob lower score
@@ -419,7 +416,7 @@ class TestGameCompletion:
             if game_state.is_complete:
                 break
 
-        # Game should be complete
+        # Game should be complete (Alice gets 33 per round, reaches 200+ after 7 rounds)
         assert game_state.is_complete is True
         assert game_state.winner_id is not None
 
@@ -428,13 +425,16 @@ class TestGameCompletion:
         engine = GameEngine()
         game_state = engine.start_new_game(["Alice", "Bob"])
 
-        # Simulate a quick game
-        for _ in range(3):
+        # Simulate a quick game - give each player 42 points per round (12+11+10+9)
+        for _ in range(10):
             engine.start_new_round()
 
             for player in game_state.players:
-                for _ in range(7):
-                    engine.deal_card_to_player(player.player_id, NumberCard(value=12))
+                # Deal cards without creating duplicates
+                engine.deal_card_to_player(player.player_id, NumberCard(value=12))
+                engine.deal_card_to_player(player.player_id, NumberCard(value=11))
+                engine.deal_card_to_player(player.player_id, NumberCard(value=10))
+                engine.deal_card_to_player(player.player_id, NumberCard(value=9))
                 engine.player_stay(player.player_id)
 
             if game_state.is_complete:

@@ -238,11 +238,13 @@ class GameEngine:
         if player_state.is_busted:
             self._handle_player_bust(player_id)
 
-        # Handle Flip Three counter
+        # Handle Flip Three counter - only decrement for non-action cards
         if player_state.flip_three_active and player_state.flip_three_count > 0:
-            player_state.flip_three_count -= 1
-            if player_state.flip_three_count == 0:
-                player_state.flip_three_active = False
+            # Only decrement if the card dealt was NOT an action card
+            if not isinstance(card_from_deck, ActionCard):
+                player_state.flip_three_count -= 1
+                if player_state.flip_three_count == 0:
+                    player_state.flip_three_active = False
 
     def player_hit(self, player_id: str) -> None:
         """
@@ -505,14 +507,8 @@ class GameEngine:
         score_breakdown = calculate_score(player_state.cards_in_hand)
         player_state.round_score = score_breakdown.final_score
 
-        # Check if player reached winning score (200+)
-        # This is a WIN, not a bust!
-        potential_total = player_state.total_score + score_breakdown.final_score
-
-        if potential_total >= 200:
-            # Player is close to or at winning - this isn't a bust
-            # They can choose to stay to lock in their score
-            pass
+        # Note: Reaching or exceeding 200 is WINNING, not busting!
+        # The only way to bust is duplicate cards (checked above)
 
     def _handle_player_bust(self, player_id: str) -> None:
         """
