@@ -5,8 +5,19 @@ channels:
 dependencies:
   - python=3.10
   - pip
+  - ipykernel  # For Jupyter notebook support
   - pip:
+    # GUI dependencies
     - streamlit>=1.28.0
+    # Testing dependencies
     - pytest>=7.0.0
     - pytest-cov>=4.0.0
-    - -e ..  # Install the flip7 package in editable mode
+    # Simulation dependencies
+    - jupyter>=1.0.0
+    - pandas>=2.0.0
+    - matplotlib>=3.7.0
+    - seaborn>=0.12.0
+    - scipy>=1.10.0
+    - tqdm>=4.65.0
+    # Install the flip7 package in editable mode
+    - -e ..

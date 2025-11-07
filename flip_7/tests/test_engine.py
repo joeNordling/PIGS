@@ -176,8 +176,10 @@ class TestCardDealing:
         engine.deal_card_to_player(player_id, NumberCard(value=12))
         engine.deal_card_to_player(player_id, NumberCard(value=11))
 
-        # Deal Freeze card
-        engine.deal_card_to_player(player_id, ActionCard(action_type=ActionType.FREEZE))
+        # Deal Freeze card and apply to self
+        freeze_card = ActionCard(action_type=ActionType.FREEZE)
+        engine.deal_card_to_player(player_id, freeze_card)
+        engine.apply_action_card_effect(freeze_card, player_id, player_id)
 
         player_state = game_state.current_round.player_states[player_id]
         assert player_state.has_stayed is True
@@ -191,7 +193,9 @@ class TestCardDealing:
 
         player_id = game_state.players[0].player_id
 
-        engine.deal_card_to_player(player_id, ActionCard(action_type=ActionType.FLIP_THREE))
+        flip_three_card = ActionCard(action_type=ActionType.FLIP_THREE)
+        engine.deal_card_to_player(player_id, flip_three_card)
+        engine.apply_action_card_effect(flip_three_card, player_id, player_id)
 
         player_state = game_state.current_round.player_states[player_id]
         assert player_state.flip_three_active is True
@@ -206,8 +210,10 @@ class TestCardDealing:
         player_id = game_state.players[0].player_id
         player_state = game_state.current_round.player_states[player_id]
 
-        # Deal FLIP_THREE card
-        engine.deal_card_to_player(player_id, ActionCard(action_type=ActionType.FLIP_THREE))
+        # Deal FLIP_THREE card and apply to self
+        flip_three_card = ActionCard(action_type=ActionType.FLIP_THREE)
+        engine.deal_card_to_player(player_id, flip_three_card)
+        engine.apply_action_card_effect(flip_three_card, player_id, player_id)
 
         # Should have 1 card in hand (the FLIP_THREE card itself)
         assert len(player_state.cards_in_hand) == 1
@@ -239,12 +245,16 @@ class TestCardDealing:
         player_id = game_state.players[0].player_id
         player_state = game_state.current_round.player_states[player_id]
 
-        # Deal FLIP_THREE card
-        engine.deal_card_to_player(player_id, ActionCard(action_type=ActionType.FLIP_THREE))
+        # Deal FLIP_THREE card and apply to self
+        flip_three_card = ActionCard(action_type=ActionType.FLIP_THREE)
+        engine.deal_card_to_player(player_id, flip_three_card)
+        engine.apply_action_card_effect(flip_three_card, player_id, player_id)
         assert player_state.flip_three_count == 3
 
         # Deal an action card (SECOND_CHANCE) - should NOT count toward the 3
-        engine.deal_card_to_player(player_id, ActionCard(action_type=ActionType.SECOND_CHANCE))
+        sc_card = ActionCard(action_type=ActionType.SECOND_CHANCE)
+        engine.deal_card_to_player(player_id, sc_card)
+        engine.apply_action_card_effect(sc_card, player_id, player_id)
         assert player_state.flip_three_count == 3, "Action cards shouldn't count"
         assert len(player_state.cards_in_hand) == 2
 
@@ -269,8 +279,10 @@ class TestCardDealing:
         player_id = game_state.players[0].player_id
         player_state = game_state.current_round.player_states[player_id]
 
-        # Deal FLIP_THREE card
-        engine.deal_card_to_player(player_id, ActionCard(action_type=ActionType.FLIP_THREE))
+        # Deal FLIP_THREE card and apply to self
+        flip_three_card = ActionCard(action_type=ActionType.FLIP_THREE)
+        engine.deal_card_to_player(player_id, flip_three_card)
+        engine.apply_action_card_effect(flip_three_card, player_id, player_id)
         assert player_state.flip_three_count == 3
 
         # Deal a modifier card - SHOULD count toward the 3
@@ -294,7 +306,9 @@ class TestCardDealing:
 
         player_id = game_state.players[0].player_id
 
-        engine.deal_card_to_player(player_id, ActionCard(action_type=ActionType.SECOND_CHANCE))
+        sc_card = ActionCard(action_type=ActionType.SECOND_CHANCE)
+        engine.deal_card_to_player(player_id, sc_card)
+        engine.apply_action_card_effect(sc_card, player_id, player_id)
 
         player_state = game_state.current_round.player_states[player_id]
         assert player_state.has_second_chance is True
@@ -345,8 +359,12 @@ class TestPlayerActions:
 
         player_id = game_state.players[0].player_id
 
-        # Deal Second Chance card and two duplicates
-        engine.deal_card_to_player(player_id, ActionCard(action_type=ActionType.SECOND_CHANCE))
+        # Deal Second Chance card and apply it
+        sc_card = ActionCard(action_type=ActionType.SECOND_CHANCE)
+        engine.deal_card_to_player(player_id, sc_card)
+        engine.apply_action_card_effect(sc_card, player_id, player_id)
+
+        # Deal two duplicates
         engine.deal_card_to_player(player_id, NumberCard(value=12))
         engine.deal_card_to_player(player_id, NumberCard(value=12))
 
@@ -533,3 +551,180 @@ class TestGameCompletion:
         if game_state.is_complete:
             game_end_events = engine.get_event_logger().get_events(event_type=EventType.GAME_ENDED)
             assert len(game_end_events) == 1
+
+
+class TestActionCardTargeting:
+    """Test action card targeting functionality."""
+
+    def test_flip_three_can_target_opponent(self):
+        """Test that Flip Three can be applied to an opponent."""
+        engine = GameEngine()
+        engine.start_new_game(["Alice", "Bob"])
+        engine.start_new_round()
+
+        alice_id = engine.game_state.players[0].player_id
+        bob_id = engine.game_state.players[1].player_id
+
+        # Deal Flip Three to Alice
+        flip_three_card = ActionCard(action_type=ActionType.FLIP_THREE)
+        engine.deal_card_to_player(alice_id, flip_three_card)
+
+        # Alice applies it to Bob
+        engine.apply_action_card_effect(flip_three_card, bob_id, alice_id)
+
+        # Check that Bob has Flip Three active, not Alice
+        game_state = engine.game_state
+        alice_state = game_state.current_round.player_states[alice_id]
+        bob_state = game_state.current_round.player_states[bob_id]
+
+        assert not alice_state.flip_three_active
+        assert bob_state.flip_three_active
+        assert bob_state.flip_three_count == 3
+
+    def test_flip_three_can_target_self(self):
+        """Test that Flip Three can be applied to self."""
+        engine = GameEngine()
+        engine.start_new_game(["Alice", "Bob"])
+        engine.start_new_round()
+
+        alice_id = engine.game_state.players[0].player_id
+
+        # Deal Flip Three to Alice
+        flip_three_card = ActionCard(action_type=ActionType.FLIP_THREE)
+        engine.deal_card_to_player(alice_id, flip_three_card)
+
+        # Alice applies it to herself
+        engine.apply_action_card_effect(flip_three_card, alice_id, alice_id)
+
+        # Check that Alice has Flip Three active
+        game_state = engine.game_state
+        alice_state = game_state.current_round.player_states[alice_id]
+
+        assert alice_state.flip_three_active
+        assert alice_state.flip_three_count == 3
+
+    def test_freeze_can_target_opponent(self):
+        """Test that Freeze can be applied to an opponent."""
+        engine = GameEngine()
+        engine.start_new_game(["Alice", "Bob"])
+        engine.start_new_round()
+
+        alice_id = engine.game_state.players[0].player_id
+        bob_id = engine.game_state.players[1].player_id
+
+        # Give Bob some cards first
+        engine.deal_card_to_player(bob_id, NumberCard(value=7))
+        engine.deal_card_to_player(bob_id, NumberCard(value=5))
+
+        # Deal Freeze to Alice
+        freeze_card = ActionCard(action_type=ActionType.FREEZE)
+        engine.deal_card_to_player(alice_id, freeze_card)
+
+        # Alice freezes Bob
+        engine.apply_action_card_effect(freeze_card, bob_id, alice_id)
+
+        # Check that Bob is frozen (stayed) and score is banked
+        game_state = engine.game_state
+        bob_state = game_state.current_round.player_states[bob_id]
+
+        assert bob_state.has_stayed
+        assert bob_state.round_score == 12  # 7 + 5
+        assert bob_state.total_score == 12
+
+    def test_freeze_can_target_self(self):
+        """Test that Freeze can be applied to self."""
+        engine = GameEngine()
+        engine.start_new_game(["Alice", "Bob"])
+        engine.start_new_round()
+
+        alice_id = engine.game_state.players[0].player_id
+
+        # Give Alice some cards first
+        engine.deal_card_to_player(alice_id, NumberCard(value=10))
+
+        # Deal Freeze to Alice
+        freeze_card = ActionCard(action_type=ActionType.FREEZE)
+        engine.deal_card_to_player(alice_id, freeze_card)
+
+        # Alice freezes herself
+        engine.apply_action_card_effect(freeze_card, alice_id, alice_id)
+
+        # Check that Alice is frozen
+        game_state = engine.game_state
+        alice_state = game_state.current_round.player_states[alice_id]
+
+        assert alice_state.has_stayed
+        assert alice_state.round_score == 10
+
+    def test_second_chance_first_can_be_kept(self):
+        """Test that first Second Chance can be kept by the drawer."""
+        engine = GameEngine()
+        engine.start_new_game(["Alice", "Bob"])
+        engine.start_new_round()
+
+        alice_id = engine.game_state.players[0].player_id
+
+        # Deal Second Chance to Alice
+        sc_card = ActionCard(action_type=ActionType.SECOND_CHANCE)
+        engine.deal_card_to_player(alice_id, sc_card)
+
+        # Alice keeps it
+        engine.apply_action_card_effect(sc_card, alice_id, alice_id)
+
+        # Check that Alice has Second Chance
+        game_state = engine.game_state
+        alice_state = game_state.current_round.player_states[alice_id]
+
+        assert alice_state.has_second_chance
+
+    def test_second_chance_second_must_go_to_opponent(self):
+        """Test that second Second Chance must be given to opponent."""
+        engine = GameEngine()
+        engine.start_new_game(["Alice", "Bob"])
+        engine.start_new_round()
+
+        alice_id = engine.game_state.players[0].player_id
+        bob_id = engine.game_state.players[1].player_id
+
+        # Give Alice first Second Chance
+        sc_card1 = ActionCard(action_type=ActionType.SECOND_CHANCE)
+        engine.deal_card_to_player(alice_id, sc_card1)
+        engine.apply_action_card_effect(sc_card1, alice_id, alice_id)
+
+        # Deal second Second Chance to Alice
+        sc_card2 = ActionCard(action_type=ActionType.SECOND_CHANCE)
+        engine.deal_card_to_player(alice_id, sc_card2)
+
+        # Alice tries to keep second one - should fail
+        with pytest.raises(ValueError, match="already has a Second Chance"):
+            engine.apply_action_card_effect(sc_card2, alice_id, alice_id)
+
+        # Alice gives it to Bob - should succeed
+        engine.apply_action_card_effect(sc_card2, bob_id, alice_id)
+
+        # Check that Bob now has Second Chance
+        game_state = engine.game_state
+        bob_state = game_state.current_round.player_states[bob_id]
+
+        assert bob_state.has_second_chance
+
+    def test_cannot_target_player_who_has_stayed(self):
+        """Test that action cards cannot target players who have stayed."""
+        engine = GameEngine()
+        engine.start_new_game(["Alice", "Bob"])
+        engine.start_new_round()
+
+        alice_id = engine.game_state.players[0].player_id
+        bob_id = engine.game_state.players[1].player_id
+
+        # Bob stays
+        engine.deal_card_to_player(bob_id, NumberCard(value=7))
+        engine.player_stay(bob_id)
+
+        # Alice gets Flip Three
+        flip_three_card = ActionCard(action_type=ActionType.FLIP_THREE)
+        engine.deal_card_to_player(alice_id, flip_three_card)
+
+        # Alice tries to apply to Bob who has stayed - should fail
+        with pytest.raises(ValueError, match="already stayed"):
+            engine.apply_action_card_effect(flip_three_card, bob_id, alice_id)

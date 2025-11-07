@@ -297,12 +297,148 @@ The test suite targets >80% code coverage across:
 - **Type Safety:** Full type hints throughout
 - **Conda Environment:** Isolated environment with easy setup
 
+### 🎯 Simulation Framework
+
+The flip_7 package now includes a complete simulation framework for testing strategies and analyzing gameplay patterns through hundreds of thousands of automated games.
+
+**All simulation dependencies are included by default** when you set up the `pigs-flip7` conda environment! No additional installation needed.
+
+The environment includes:
+- `jupyter` - Notebook environment
+- `pandas` - Data analysis
+- `matplotlib` & `seaborn` - Visualization
+- `scipy` - Statistical testing
+- `tqdm` - Progress bars
+- `ipykernel` - Jupyter kernel support
+
+#### Quick Start: Running Simulations
+
+```python
+from flip_7.simulation.runner import SimulationRunner
+from flip_7.simulation.strategies import RandomStrategy, ThresholdStrategy
+from flip_7.simulation.exporter import SimulationExporter
+
+# Define strategies to test
+strategies = [
+    RandomStrategy(hit_probability=0.5),
+    ThresholdStrategy(target_score=80),
+    ThresholdStrategy(target_score=100),
+    ThresholdStrategy(target_score=120),
+]
+
+# Create runner
+runner = SimulationRunner(
+    strategies=strategies,
+    num_players=2,
+    seed=42,  # For reproducibility
+    verbose=True
+)
+
+# Run simulation
+results = runner.run_simulation(num_games=10000)
+
+# View results
+for name, stats in results.strategy_stats.items():
+    print(f"{name}: {stats.win_rate:.1%} win rate, {stats.avg_score:.1f} avg score")
+
+# Export for analysis
+exporter = SimulationExporter(output_dir="simulation_results")
+files = exporter.export_all(results, "strategy_comparison")
+```
+
+#### Strategy Interface
+
+Create custom strategies by implementing `BaseStrategy`:
+
+```python
+from flip_7.simulation.strategy import BaseStrategy, StrategyContext
+
+class MyCustomStrategy(BaseStrategy):
+    def decide_hit_or_stay(self, context: StrategyContext) -> bool:
+        # Your decision logic here
+        # context provides: hand, scores, opponents, visible cards, etc.
+
+        # Example: hit if below 100 and duplicate risk is low
+        if context.my_round_score < 100:
+            duplicate_probs = context.calculate_duplicate_probability()
+            if not duplicate_probs or max(duplicate_probs.values()) < 0.3:
+                return True  # HIT
+        return False  # STAY
+
+    def decide_second_chance_discard(self, context, duplicate_value, duplicate_cards):
+        # Choose which duplicate to discard
+        return duplicate_cards[-1]  # Discard most recent
+```
+
+#### Built-in Strategies
+
+**RandomStrategy**: Makes random hit/stay decisions
+- Parameters: `hit_probability` (0.0-1.0), `seed` (for reproducibility)
+- Use case: Baseline comparison
+
+**ThresholdStrategy**: Hits until reaching a target score, then stays
+- Parameters:
+  - `target_score`: Score threshold (e.g., 80, 100, 120)
+- Use case: Testing simple score-based strategies
+
+#### Jupyter Notebook for Analysis
+
+The `flip_7/notebooks/` directory contains a comprehensive analysis notebook:
+
+**simulation_analysis.ipynb**: Complete simulation and analysis workflow
+- Strategy configuration
+- Batch simulation with progress tracking
+- Data export (CSV/JSON/summary)
+- Statistical analysis (win rates, score distributions, game lengths)
+- Head-to-head comparisons
+- Statistical significance testing (chi-square, t-test)
+- Risk-reward analysis (bust rates vs win rates)
+- Flip 7 achievement analysis
+- Comprehensive visualizations
+
+To use the notebook:
+
+```bash
+# Activate environment with simulation dependencies
+conda activate pigs-flip7
+
+# Start Jupyter from the flip_7 directory
+cd flip_7
+jupyter notebook notebooks/simulation_analysis.ipynb
+```
+
+#### Data Export Formats
+
+**CSV Format**: Flat table with one row per player per game
+- Easy loading with pandas: `df = pd.read_csv("results.csv")`
+- Columns: game_id, player_id, strategy, won_game, final_score, rounds_played, etc.
+- Ideal for: Quick statistical analysis, filtering, aggregations
+
+**JSON Format**: Nested structure with complete game details
+- Full game state for each game
+- Strategy statistics summary
+- Ideal for: Deep analysis, debugging, detailed exploration
+
+**Summary Format**: Human-readable text report
+- Win rates and performance tables
+- Head-to-head comparisons (for 2-player games)
+- Flip 7 and bust statistics
+- Ideal for: Quick review, sharing results
+
+#### Simulation Features
+
+**Full Card Tracking**: Strategies can track all visible cards to calculate probabilities
+**Variable Player Counts**: Test 2-6 player games
+**Deterministic with Seeds**: Reproducible results for debugging
+**Batch Processing**: Run hundreds of thousands of games efficiently
+**Progress Tracking**: Real-time progress bars for long simulations
+**Comprehensive Metrics**: Win rates, scores, flip 7s, busts, game lengths
+
 ### 🚧 Future Enhancements
 
-- **Simulation:** Automated gameplay with AI strategies
-- **Advanced Analytics:** Charts, graphs, and trend visualizations
-- **Multi-game Stats:** Cross-game comparisons and patterns
-- **Export Features:** PDF reports, CSV exports
+- **Advanced Analytics:** Charts, graphs, and trend visualizations in GUI
+- **Multi-game Stats:** Cross-game comparisons and patterns in GUI
+- **Export Features:** PDF reports from GUI
 
 ## File Storage
 

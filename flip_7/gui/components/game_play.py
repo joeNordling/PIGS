@@ -274,7 +274,16 @@ def _show_player_card(player_info, player_state, engine):
                         try:
                             engine.deal_card_to_player(player_info.player_id, selected_card)
                             st.session_state[f'dealing_to_{player_info.player_id}'] = False
-                            st.success(f"Dealt {get_card_display(selected_card)} to {player_info.name}")
+
+                            # Check if it's an action card that needs target selection
+                            if isinstance(selected_card, ActionCard):
+                                # Store action card info for target selection
+                                st.session_state['pending_action_card'] = selected_card
+                                st.session_state['action_card_owner'] = player_info.player_id
+                                st.success(f"Dealt {get_card_display(selected_card)} to {player_info.name} - Select target")
+                            else:
+                                st.success(f"Dealt {get_card_display(selected_card)} to {player_info.name}")
+
                             st.rerun()
                         except ValueError as e:
                             st.error(f"Error dealing card: {e}")
@@ -325,6 +334,85 @@ def _show_player_card(player_info, player_state, engine):
                     st.session_state[f'second_chance_{player_info.player_id}'] = False
                     st.rerun()
 
+    # Action card target selection dialog
+    if st.session_state.get('pending_action_card') is not None:
+        action_card = st.session_state['pending_action_card']
+        owner_id = st.session_state['action_card_owner']
+        owner_name = next((p.name for p in game_state.players if p.player_id == owner_id), "Unknown")
+
+        with st.expander(f"🎯 {action_card.action_type.value} - Select Target", expanded=True):
+            # Get list of eligible targets (active players who haven't stayed)
+            eligible_targets = []
+            for pid, pstate in game_state.current_round.player_states.items():
+                if not pstate.has_stayed:
+                    pname = next((p.name for p in game_state.players if p.player_id == pid), pid)
+                    eligible_targets.append((pid, pname))
+
+            # Determine behavior based on action type
+            if action_card.action_type == ActionType.SECOND_CHANCE:
+                owner_state = game_state.current_round.player_states[owner_id]
+                if not owner_state.has_second_chance:
+                    # First Second Chance: auto-keep
+                    st.info(f"First Second Chance - automatically kept by {owner_name}")
+                    try:
+                        engine.apply_action_card_effect(action_card, owner_id, owner_id)
+                        del st.session_state['pending_action_card']
+                        del st.session_state['action_card_owner']
+                        st.rerun()
+                    except ValueError as e:
+                        st.error(f"Error: {e}")
+                else:
+                    # Second Second Chance: must give to opponent
+                    st.warning(f"{owner_name} already has a Second Chance - must give this one to an opponent")
+                    opponent_targets = [(pid, pname) for pid, pname in eligible_targets if pid != owner_id]
+
+                    if not opponent_targets:
+                        st.error("No eligible opponents to give Second Chance to!")
+                    else:
+                        for target_id, target_name in opponent_targets:
+                            if st.button(
+                                f"Give to {target_name}",
+                                key=f"sc_target_{target_id}"
+                            ):
+                                try:
+                                    engine.apply_action_card_effect(action_card, target_id, owner_id)
+                                    del st.session_state['pending_action_card']
+                                    del st.session_state['action_card_owner']
+                                    st.success(f"Gave Second Chance to {target_name}")
+                                    st.rerun()
+                                except ValueError as e:
+                                    st.error(f"Error: {e}")
+
+            elif action_card.action_type == ActionType.FLIP_THREE:
+                st.markdown(f"**{owner_name}** drew Flip Three - choose who must take 3 cards:")
+                for target_id, target_name in eligible_targets:
+                    label = f"{'Apply to self' if target_id == owner_id else f'Apply to {target_name}'}"
+                    if st.button(label, key=f"ft_target_{target_id}"):
+                        try:
+                            engine.apply_action_card_effect(action_card, target_id, owner_id)
+                            del st.session_state['pending_action_card']
+                            del st.session_state['action_card_owner']
+                            st.success(f"Applied Flip Three to {target_name}")
+                            st.rerun()
+                        except ValueError as e:
+                            st.error(f"Error: {e}")
+
+            elif action_card.action_type == ActionType.FREEZE:
+                st.markdown(f"**{owner_name}** drew Freeze - choose who to freeze:")
+                for target_id, target_name in eligible_targets:
+                    target_state = game_state.current_round.player_states[target_id]
+                    score_preview = calculate_score(target_state.cards_in_hand).final_score
+                    label = f"{'Freeze self' if target_id == owner_id else f'Freeze {target_name}'} (banks {score_preview} pts)"
+                    if st.button(label, key=f"freeze_target_{target_id}"):
+                        try:
+                            engine.apply_action_card_effect(action_card, target_id, owner_id)
+                            del st.session_state['pending_action_card']
+                            del st.session_state['action_card_owner']
+                            st.success(f"Froze {target_name} with {score_preview} points")
+                            st.rerun()
+                        except ValueError as e:
+                            st.error(f"Error: {e}")
+
         st.markdown("---")
 
 
@@ -360,6 +448,13 @@ def _deal_multiple_cards_sequentially(engine, player_info, cards):
             try:
                 # Deal the card
                 engine.deal_card_to_player(player_info.player_id, card)
+
+                # Auto-apply action cards in multi-select mode (always to self)
+                if isinstance(card, ActionCard):
+                    # In multi-select mode, action cards are auto-applied to the drawer
+                    # For strategic targeting, use single-card mode
+                    engine.apply_action_card_effect(card, player_info.player_id, player_info.player_id)
+
                 success_count += 1
 
                 # Update progress

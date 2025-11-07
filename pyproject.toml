@@ -17,6 +17,14 @@ dev = [
   "pytest>=7.0.0",
   "pytest-cov>=4.0.0"
 ]
+simulation = [
+  "jupyter>=1.0.0",
+  "pandas>=2.0.0",
+  "matplotlib>=3.7.0",
+  "seaborn>=0.12.0",
+  "scipy>=1.10.0",
+  "tqdm>=4.65.0"
+]
 
 [tool.setuptools]
 

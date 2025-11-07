@@ -216,9 +216,10 @@ class GameEngine:
             self._reshuffle_deck()
             current_round.cards_remaining_in_deck = len(self.game_state.deck)
 
-        # Handle action cards
-        if isinstance(card_from_deck, ActionCard):
-            self._apply_action_card(player_id, card_from_deck)
+        # NOTE: Action cards are NO LONGER automatically applied here
+        # The caller must now call apply_action_card_effect() after dealing
+        # to specify the target for the action card effect.
+        # This allows for strategic targeting of Flip Three and Freeze cards.
 
         # Check if round ended due to action card (e.g., FREEZE on last player)
         # If so, skip remaining processing as round is already complete
@@ -250,6 +251,58 @@ class GameEngine:
                 player_state.flip_three_count -= 1
                 if player_state.flip_three_count == 0:
                     player_state.flip_three_active = False
+
+    def apply_action_card_effect(
+        self,
+        card: ActionCard,
+        target_player_id: str,
+        original_player_id: Optional[str] = None
+    ) -> None:
+        """
+        Apply an action card's effect to a target player.
+
+        This method must be called after dealing an action card via deal_card_to_player().
+        It allows the caller to specify who should receive the effect.
+
+        Args:
+            card: The action card to apply
+            target_player_id: ID of the player who receives the effect
+            original_player_id: Optional ID of the player who drew the card (for logging)
+
+        Raises:
+            ValueError: If invalid game state or target player
+
+        Example:
+            # Deal a Freeze card to player1
+            engine.deal_card_to_player("player1", freeze_card)
+
+            # Apply the freeze effect to player2 (opponent)
+            engine.apply_action_card_effect(freeze_card, "player2", "player1")
+        """
+        if self.game_state is None or self.game_state.current_round is None:
+            raise ValueError("No active round")
+
+        if target_player_id not in self.game_state.current_round.player_states:
+            raise ValueError(f"Player {target_player_id} not in game")
+
+        # Validate target player can receive effect (must be active, not stayed)
+        target_state = self.game_state.current_round.player_states[target_player_id]
+        if target_state.has_stayed and card.action_type in [ActionType.FREEZE, ActionType.FLIP_THREE]:
+            raise ValueError(f"Cannot apply {card.action_type.value} to {target_player_id} - player has already stayed")
+
+        # Special validation for Second Chance
+        if card.action_type == ActionType.SECOND_CHANCE:
+            # If original player already has Second Chance, cannot give second one to self
+            if original_player_id and original_player_id == target_player_id:
+                original_state = self.game_state.current_round.player_states[original_player_id]
+                if original_state.has_second_chance:
+                    raise ValueError(
+                        f"Player {original_player_id} already has a Second Chance card. "
+                        "Second one must be given to an opponent."
+                    )
+
+        # Apply the effect
+        self._apply_action_card(target_player_id, card, original_player_id)
 
     def player_hit(self, player_id: str) -> None:
         """
@@ -429,30 +482,48 @@ class GameEngine:
 
         return current_round
 
-    def _apply_action_card(self, player_id: str, card: ActionCard) -> None:
+    def _apply_action_card(
+        self,
+        target_player_id: str,
+        card: ActionCard,
+        original_player_id: Optional[str] = None
+    ) -> None:
         """
-        Apply the effect of an action card.
+        Apply the effect of an action card to a target player.
 
         Args:
-            player_id: ID of the player receiving the action
+            target_player_id: ID of the player receiving the effect
             card: The action card
+            original_player_id: ID of the player who drew the card (for logging)
         """
-        player_state = self.game_state.current_round.player_states[player_id]
-        player_name = next(p.name for p in self.game_state.players if p.player_id == player_id)
+        target_state = self.game_state.current_round.player_states[target_player_id]
+        target_name = next(p.name for p in self.game_state.players if p.player_id == target_player_id)
+
+        # Get original player name if provided
+        if original_player_id and original_player_id != target_player_id:
+            original_name = next(p.name for p in self.game_state.players if p.player_id == original_player_id)
+        else:
+            original_name = None
 
         if card.action_type == ActionType.FREEZE:
-            # Player banks points and must stay
-            player_state.has_stayed = True
-            score_breakdown = calculate_score(player_state.cards_in_hand)
-            player_state.round_score = score_breakdown.final_score
-            player_state.total_score += player_state.round_score
+            # Target player banks points and must stay
+            target_state.has_stayed = True
+            score_breakdown = calculate_score(target_state.cards_in_hand)
+            target_state.round_score = score_breakdown.final_score
+            target_state.total_score += target_state.round_score
+
+            # Create description based on whether it was applied to self or opponent
+            if original_name and original_name != target_name:
+                description = f"{original_name} froze {target_name} who banked {target_state.round_score} points"
+            else:
+                description = f"{target_name} was frozen and banked {target_state.round_score} points"
 
             self.event_logger.log_event(ActionCardAppliedEvent(
                 game_id=self.game_state.game_id,
-                player_id=player_id,
-                player_name=player_name,
+                player_id=target_player_id,
+                player_name=target_name,
                 action_type=ActionType.FREEZE,
-                effect_description=f"{player_name} was frozen and banked {player_state.round_score} points"
+                effect_description=description
             ))
 
             # Check if round should end (fixes softlock when last player gets frozen)
@@ -460,30 +531,56 @@ class GameEngine:
                 self.end_round()
 
         elif card.action_type == ActionType.FLIP_THREE:
-            # Player must take next 3 cards
-            player_state.flip_three_active = True
-            player_state.flip_three_count = 3
+            # Target player must take next 3 cards
+            target_state.flip_three_active = True
+            target_state.flip_three_count = 3
+
+            # Create description based on whether it was applied to self or opponent
+            if original_name and original_name != target_name:
+                description = f"{original_name} applied Flip Three to {target_name} who must accept the next 3 cards"
+            else:
+                description = f"{target_name} must accept the next 3 cards"
 
             self.event_logger.log_event(ActionCardAppliedEvent(
                 game_id=self.game_state.game_id,
-                player_id=player_id,
-                player_name=player_name,
+                player_id=target_player_id,
+                player_name=target_name,
                 action_type=ActionType.FLIP_THREE,
-                effect_description=f"{player_name} must accept the next 3 cards"
+                effect_description=description
             ))
 
         elif card.action_type == ActionType.SECOND_CHANCE:
-            # Player can hold this card to use later
+            # Target player can hold this card to use later
             # Only one Second Chance allowed at a time
-            if not player_state.has_second_chance:
-                player_state.has_second_chance = True
+            if not target_state.has_second_chance:
+                target_state.has_second_chance = True
+
+                # If card was given to someone else, move it from original player's hand to target's hand
+                if original_player_id and original_player_id != target_player_id:
+                    original_state = self.game_state.current_round.player_states[original_player_id]
+                    # Find the Second Chance card in original player's hand
+                    sc_card_in_hand = next(
+                        (c for c in original_state.cards_in_hand
+                         if isinstance(c, ActionCard) and c.action_type == ActionType.SECOND_CHANCE),
+                        None
+                    )
+                    if sc_card_in_hand:
+                        # Remove from original player's hand and add to target's hand
+                        original_state.cards_in_hand.remove(sc_card_in_hand)
+                        target_state.cards_in_hand.append(sc_card_in_hand)
+
+                # Create description based on whether it was applied to self or opponent
+                if original_name and original_name != target_name:
+                    description = f"{original_name} gave Second Chance to {target_name}"
+                else:
+                    description = f"{target_name} received a Second Chance card"
 
                 self.event_logger.log_event(ActionCardAppliedEvent(
                     game_id=self.game_state.game_id,
-                    player_id=player_id,
-                    player_name=player_name,
+                    player_id=target_player_id,
+                    player_name=target_name,
                     action_type=ActionType.SECOND_CHANCE,
-                    effect_description=f"{player_name} received a Second Chance card"
+                    effect_description=description
                 ))
 
     def _update_player_score(self, player_id: str) -> None:
