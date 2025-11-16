@@ -7,7 +7,7 @@ This strategy hits until reaching a target score, then stays.
 from typing import List, Optional
 
 from flip_7.data.models import NumberCard
-from flip_7.simulation.strategy import BaseStrategy, StrategyContext
+from flip_7.simulation.strategy import BaseStrategy, StrategyContext, OpponentInfo
 
 
 class ThresholdStrategy(BaseStrategy):
@@ -24,7 +24,8 @@ class ThresholdStrategy(BaseStrategy):
     def __init__(
         self,
         name: Optional[str] = None,
-        target_score: int = 100
+        target_score: int = 100,
+        distance_from_200: int = 0
     ):
         """
         Initialize threshold strategy.
@@ -32,12 +33,11 @@ class ThresholdStrategy(BaseStrategy):
         Args:
             name: Optional custom name
             target_score: Score to reach before staying (default: 100)
+            distance_from_200: If an opponent is within this distance from 200, then you will hit (default: 0)
         """
-        if name is None:
-            name = f"Threshold({target_score})"
-
-        super().__init__(name)
+        super().__init__(name or f"Threshold({target_score})")
         self.target_score = target_score
+        self.distance_from_200 = distance_from_200
 
     def decide_hit_or_stay(self, context: StrategyContext) -> bool:
         """
@@ -59,7 +59,7 @@ class ThresholdStrategy(BaseStrategy):
             return True
 
         # Hit if below threshold, otherwise stay
-        return context.my_round_score < self.target_score
+        return context.my_round_score < self.target_score or self.opponent_can_win(context)
 
     def decide_second_chance_discard(
         self,
@@ -161,3 +161,30 @@ class ThresholdStrategy(BaseStrategy):
             if opp.player_id in opponent_ids
         }
         return max(opponent_scores.keys(), key=lambda pid: opponent_scores[pid])
+    
+    
+    def opponent_can_win(self, context: StrategyContext) -> bool:
+        """
+        Look at opponent scores and decide whether this affects whether to hit or stay
+
+        Strategy:
+        - If an opponent is at 200+ then you should always hit
+        - If an opponent is within your defined distance from 200 (and is active), then you will hit
+            - This distance will default to 0 so if you don't specify it, then you will not have any effect from this
+        
+        Args:
+            context: Complete game context
+
+        Returns:
+            True to HIT, False to STAY
+        """
+
+        for opponent in context.opponents:
+            if opponent.total_score >= 200:
+                return True
+            if (not (opponent.has_stayed or opponent.is_busted)) and (opponent.total_score + opponent.round_score >= (200 - self.distance_from_200)):
+                return True
+        return False
+
+
+
