@@ -6,6 +6,8 @@ Run with:
 """
 
 import json
+import time
+from collections import deque
 from pathlib import Path
 from uuid import uuid4
 
@@ -132,6 +134,9 @@ async def websocket_endpoint(websocket: WebSocket, game_id: str, player_id: str)
             "game_id": game_id,
         })
 
+    # Per-connection rate limiter: max 10 messages per second (Step 13 — security).
+    _recent_timestamps: deque[float] = deque(maxlen=10)
+
     try:
         while True:
             raw = await websocket.receive_text()
@@ -140,6 +145,14 @@ async def websocket_endpoint(websocket: WebSocket, game_id: str, player_id: str)
             if len(raw) > 10_000:
                 await websocket.send_json({"type": "error", "message": "Message too large"})
                 continue
+
+            # Rate limit: if the last 10 messages all arrived within 1 second, drop the connection.
+            now = time.monotonic()
+            _recent_timestamps.append(now)
+            if len(_recent_timestamps) == 10 and (now - _recent_timestamps[0]) < 1.0:
+                await websocket.close(code=1008, reason="Rate limit exceeded")
+                room_manager.remove_connection(game_id, player_id, websocket)
+                return
 
             try:
                 data = json.loads(raw)

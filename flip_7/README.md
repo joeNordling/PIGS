@@ -147,6 +147,57 @@ The Flip 7 GUI provides a complete game tracking interface:
 - **Second Chance**: Only available when player has duplicate number cards
 - **Auto-save**: All games save automatically - no need to manually save
 
+## Multiplayer
+
+Play Flip 7 with friends on the same network. One player runs the server; everyone else connects through their browser — no Python install needed on their side.
+
+### Setup
+
+Install the multiplayer dependencies once (in addition to the base environment):
+
+```bash
+pip install -e ".[multiplayer]"
+```
+
+### Launching the server
+
+```bash
+# Play mode — binds to your LAN IP, shareable with other players on your network
+./flip_7/launch_multiplayer.sh
+
+# Dev mode — localhost only, auto-reload on code changes
+./flip_7/launch_multiplayer.sh --dev
+
+# Override host/port manually
+python -m flip_7.network.launch_server --host 192.168.1.50 --port 8765
+```
+
+On startup the server prints the URL to share with other players, e.g.:
+
+```
+  http://192.168.1.42:8765
+```
+
+Everyone on the network opens that URL in their browser, enters a name, and joins the room. The host starts the game once everyone has joined.
+
+### How it works
+
+```
+Browser (player 1) ←→ WebSocket ←→ FastAPI server (owns GameEngine) ←→ WebSocket ←→ Browser (player N)
+```
+
+- The host's machine runs the `GameEngine`. All game logic stays server-side.
+- After every action, each player receives their own filtered state — you see your own hand in full; other players show only card count and score.
+- The existing single-player Streamlit GUI is untouched.
+
+### Multiplayer tests
+
+```bash
+pytest flip_7/tests/test_multiplayer_server.py -v
+```
+
+---
+
 ## Architecture
 
 The Flip 7 tracker follows a three-layer architecture:
@@ -162,6 +213,12 @@ flip_7/
 │   ├── events.py   # Event logging system
 │   ├── statistics.py   # Statistics calculation
 │   └── persistence.py  # JSON serialization
+├── network/        # Multiplayer server
+│   ├── room_manager.py  # In-memory rooms, connections, state broadcasting
+│   ├── server.py        # FastAPI app — HTTP + WebSocket endpoints
+│   └── launch_server.py # CLI entry point (LAN IP detection, dev/play modes)
+├── gui_multiplayer/
+│   └── static/     # Plain HTML/JS/CSS browser client
 └── tests/          # Comprehensive test suite
 ```
 
@@ -253,7 +310,7 @@ print(f"Final score: {breakdown.final_score}")
 ## Running Tests
 
 ```bash
-# Run all tests
+# Run all tests (engine + simulation + multiplayer server)
 pytest flip_7/tests/ -v
 
 # Run with coverage
@@ -261,9 +318,16 @@ pytest flip_7/tests/ --cov=flip_7 --cov-report=term-missing
 
 # Run specific test file
 pytest flip_7/tests/test_rules.py -v
+pytest flip_7/tests/test_multiplayer_server.py -v
 
 # Run specific test
 pytest flip_7/tests/test_rules.py::TestScoreCalculation::test_flip_7_bonus -v
+```
+
+Multiplayer server tests require the `multiplayer` and `dev` extras:
+
+```bash
+pip install -e ".[multiplayer,dev]"
 ```
 
 ### Expected Test Coverage
@@ -296,6 +360,11 @@ The test suite targets >80% code coverage across:
 - **Comprehensive Tests:** >80% coverage target
 - **Type Safety:** Full type hints throughout
 - **Conda Environment:** Isolated environment with easy setup
+- **Multiplayer:** LAN multiplayer via FastAPI WebSocket server + browser client
+  - Privacy filtering — opponents see only your card count, not your hand
+  - Action card targeting (Freeze, Flip Three) with modal prompts
+  - Host-controlled room lifecycle (create → join → start → rounds)
+  - Security: card validation, message size cap, rate limiting, connection cap per room
 
 ### 🎯 Simulation Framework
 

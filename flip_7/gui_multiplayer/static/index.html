@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Flip 7 Multiplayer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- =====================================================================
+       Screen 1: Lobby — join or create a room
+       ===================================================================== -->
+  <div id="screen-lobby-join" class="screen active">
+    <div class="card-panel lobby-panel">
+      <h1>🎴 Flip 7</h1>
+      <p class="subtitle">Multiplayer</p>
+
+      <div class="form-group">
+        <label for="player-name-input">Your name</label>
+        <input id="player-name-input" type="text" placeholder="Enter your name" maxlength="20" autocomplete="off">
+      </div>
+
+      <div class="form-group">
+        <label for="room-code-input">Room code <span class="hint">(leave blank to create a new room)</span></label>
+        <input id="room-code-input" type="text" placeholder="Paste room code here" autocomplete="off">
+      </div>
+
+      <button class="btn btn-primary btn-full" onclick="handleJoinOrCreate()">Join / Create Game</button>
+
+      <div id="lobby-error" class="error-banner hidden"></div>
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       Screen 2: Lobby — waiting room
+       ===================================================================== -->
+  <div id="screen-lobby-waiting" class="screen">
+    <div class="card-panel lobby-panel">
+      <h2>Waiting for players…</h2>
+
+      <div class="room-code-box">
+        <span class="room-code-label">Room code</span>
+        <span id="room-code-display" class="room-code-value"></span>
+        <button class="btn btn-small" onclick="copyRoomCode()">Copy</button>
+      </div>
+
+      <div id="player-list" class="player-list"></div>
+
+      <div id="waiting-status" class="hint">Waiting for the host to start the game…</div>
+
+      <button id="start-game-btn" class="btn btn-primary btn-full hidden" onclick="startGame()">
+        ▶ Start Game
+      </button>
+
+      <div id="waiting-error" class="error-banner hidden"></div>
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       Screen 3: Active game board
+       ===================================================================== -->
+  <div id="screen-game" class="screen">
+
+    <header class="game-header">
+      <span class="game-title">🎴 Flip 7</span>
+      <span id="game-round-display" class="game-meta">Round —</span>
+      <span id="game-deck-display" class="game-meta">Cards: —</span>
+    </header>
+
+    <div class="game-body">
+
+      <!-- Opponents -->
+      <section class="opponents-section">
+        <h3 class="section-label">Opponents</h3>
+        <div id="opponents-panel"></div>
+      </section>
+
+      <!-- My panel -->
+      <section class="my-section">
+        <h3 class="section-label">Your Hand</h3>
+        <div id="my-panel"></div>
+
+        <!-- Inline card picker (shown on "Deal Card" click) -->
+        <div id="card-picker" class="card-picker hidden">
+          <div class="picker-tabs">
+            <button class="tab-btn active" onclick="showPickerTab('numbers')">Numbers</button>
+            <button class="tab-btn" onclick="showPickerTab('modifiers')">Modifiers</button>
+            <button class="tab-btn" onclick="showPickerTab('actions')">Actions</button>
+          </div>
+          <div id="picker-numbers"  class="picker-grid"></div>
+          <div id="picker-modifiers" class="picker-grid hidden"></div>
+          <div id="picker-actions"  class="picker-grid hidden"></div>
+          <button class="btn btn-ghost btn-full" onclick="hideCardPicker()">Cancel</button>
+        </div>
+      </section>
+
+    </div>
+
+    <div id="game-error" class="error-banner hidden"></div>
+
+    <!-- "Waiting for X to choose a target" overlay shown to non-owners -->
+    <div id="action-waiting-banner" class="action-waiting-banner hidden"></div>
+  </div>
+
+  <!-- =====================================================================
+       Screen 4: Action card target selection (modal overlay)
+       ===================================================================== -->
+  <div id="screen-action-target" class="screen modal-overlay hidden">
+    <div class="card-panel modal-panel">
+      <h3 id="action-target-title">Choose a target</h3>
+      <p id="action-target-desc" class="hint"></p>
+      <div id="action-target-list" class="target-list"></div>
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       Screen 5: Second Chance card selection (modal overlay)
+       ===================================================================== -->
+  <div id="screen-second-chance" class="screen modal-overlay hidden">
+    <div class="card-panel modal-panel">
+      <h3>Use Second Chance</h3>
+      <p class="hint">Choose a duplicate number card to discard:</p>
+      <div id="second-chance-list" class="target-list"></div>
+      <button class="btn btn-ghost btn-full" onclick="closeModal('screen-second-chance')">Cancel</button>
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       Screen 6: Round end summary
+       ===================================================================== -->
+  <div id="screen-round-end" class="screen">
+    <div class="card-panel lobby-panel">
+      <h2 id="round-end-title">Round Complete</h2>
+      <div id="round-end-scores" class="score-list"></div>
+      <button id="next-round-btn" class="btn btn-primary btn-full hidden" onclick="sendStartRound()">
+        ▶ Start Next Round
+      </button>
+      <div class="hint" id="round-end-waiting" class="hidden">Waiting for the host to start the next round…</div>
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       Screen 7: Game over
+       ===================================================================== -->
+  <div id="screen-game-over" class="screen">
+    <div class="card-panel lobby-panel">
+      <h2>🎉 Game Over!</h2>
+      <div id="game-over-winner" class="winner-display"></div>
+      <div id="game-over-scores" class="score-list"></div>
+      <button class="btn btn-primary btn-full" onclick="resetToLobby()">Play Again</button>
+    </div>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>
