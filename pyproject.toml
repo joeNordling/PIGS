@@ -25,6 +25,11 @@ simulation = [
   "scipy>=1.10.0",
   "tqdm>=4.65.0"
 ]
+multiplayer = [
+  "fastapi>=0.110.0",
+  "uvicorn[standard]>=0.29.0",
+  "websockets>=12.0"
+]
 
 [tool.setuptools]
 

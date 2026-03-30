@@ -61,18 +61,25 @@ class GameEngine:
         self.game_state = game_state
         self.event_logger = event_logger
 
-    def start_new_game(self, player_names: List[str]) -> GameState:
+    def start_new_game(
+        self,
+        player_names: List[str],
+        player_ids: Optional[List[str]] = None,
+    ) -> GameState:
         """
         Start a new game with the specified players.
 
         Args:
             player_names: Names of players (2-6 players recommended)
+            player_ids: Optional pre-assigned player IDs. If omitted, UUIDs are
+                generated automatically. When provided, must be the same length
+                as player_names with no duplicates.
 
         Returns:
             The initialized game state
 
         Raises:
-            ValueError: If invalid number of players or duplicate names
+            ValueError: If invalid number of players or duplicate names/IDs
         """
         if len(player_names) < 2:
             raise ValueError("Need at least 2 players to start a game")
@@ -80,8 +87,19 @@ class GameEngine:
         if len(player_names) != len(set(player_names)):
             raise ValueError("Player names must be unique")
 
+        if player_ids is not None:
+            if len(player_ids) != len(player_names):
+                raise ValueError("player_ids must be the same length as player_names")
+            if len(player_ids) != len(set(player_ids)):
+                raise ValueError("player_ids must be unique")
+        else:
+            player_ids = [str(uuid4()) for _ in player_names]
+
         # Create player info
-        players = [PlayerInfo(player_id=str(uuid4()), name=name) for name in player_names]
+        players = [
+            PlayerInfo(player_id=pid, name=name)
+            for pid, name in zip(player_ids, player_names)
+        ]
 
         # Create and shuffle the deck (persists across rounds)
         deck = create_deck()
