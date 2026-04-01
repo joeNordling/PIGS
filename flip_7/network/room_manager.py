@@ -271,19 +271,19 @@ class RoomManager:
         state.pop("deck", None)
         state.pop("discard_pile", None)
 
-        # Redact other players' hands. Because the engine now uses the same
-        # player_ids assigned during join, no ID translation is needed.
-        def _redact_round(round_dict: dict) -> None:
+        # Keep card_count on other players so the client can show it regardless
+        # of whether the "show cards" toggle is on. Cards are no longer redacted —
+        # the client decides whether to render them.
+        def _annotate_round(round_dict: dict) -> None:
             for pid, player_state in round_dict["player_states"].items():
                 if pid != requesting_player_id:
                     player_state["card_count"] = len(player_state["cards_in_hand"])
-                    player_state["cards_in_hand"] = []
 
         if state.get("current_round"):
-            _redact_round(state["current_round"])
+            _annotate_round(state["current_round"])
 
         for past_round in state.get("round_history", []):
-            _redact_round(past_round)
+            _annotate_round(past_round)
 
         state["your_player_id"] = requesting_player_id
         state["is_host"] = self.is_host(game_id, requesting_player_id)

@@ -158,6 +158,32 @@ input[type="text"]:focus { border-color: var(--accent); }
 .badge-sc     { background: #3a1a50; color: #d0a0f7; }
 .badge-turn   { background: #0d3d56; color: #56d0f7; font-weight: 700; }
 
+/* --- Hand sort button ------------------------------------------------------- */
+
+.hand-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: .35rem;
+}
+.hand-label { font-size: .8rem; color: var(--text-muted); }
+.btn-sort   { font-size: .75rem; padding: .2rem .55rem; opacity: .85; }
+.btn-sort:hover { opacity: 1; }
+
+/* --- Flip 7 celebration banner ---------------------------------------------- */
+
+.flip7-banner {
+  background: linear-gradient(135deg, #1a3d28, #0d3d56);
+  border: 1px solid #56d0f7;
+  border-radius: 8px;
+  color: #e0f7f0;
+  font-size: 1rem;
+  padding: .75rem 1rem;
+  margin-bottom: 1rem;
+  text-align: center;
+}
+.flip7-banner.hidden { display: none; }
+
 /* --- Turn banner ------------------------------------------------------------ */
 
 .turn-banner {
@@ -172,6 +198,7 @@ input[type="text"]:focus { border-color: var(--accent); }
 .turn-forced           { background: #3d2a10; color: #f7b96a; border-bottom: 2px solid #f7b96a; }
 
 .opponent-active-turn  { border-left: 3px solid #56d0f7; }
+.opponent-hand         { margin-top: .35rem; display: flex; flex-wrap: wrap; gap: .25rem; }
 .waiting-hint          { color: var(--text-muted); font-style: italic; margin: .5rem 0 0; }
 
 /* --- Game header ------------------------------------------------------------ */

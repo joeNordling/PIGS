@@ -14,6 +14,21 @@ let myGameId   = null;
 let ws         = null;
 let lastState  = null;
 
+// Card sort modes: 'original' | 'value' | 'type'
+const SORT_MODES  = ['original', 'value', 'type'];
+const SORT_LABELS = { original: '↕ Original', value: '🔢 By Value', type: '🃏 By Type' };
+let cardSortMode  = 'original';
+
+// Whether to show opponents' cards
+let showOpponentCards = true;
+
+function toggleOpponentCards() {
+  showOpponentCards = !showOpponentCards;
+  const btn = document.getElementById('toggle-opponent-cards-btn');
+  if (btn) btn.textContent = showOpponentCards ? '🙈 Hide Cards' : '👁 Show Cards';
+  if (lastState) renderGameState(lastState);
+}
+
 // =============================================================================
 // Screen management
 // =============================================================================
@@ -240,6 +255,9 @@ function renderGameState(state) {
   document.getElementById('game-round-display').textContent = `Round ${round.round_number}`;
   document.getElementById('game-deck-display').textContent  = `Cards: ${round.cards_remaining_in_deck}`;
 
+  // Clear the "waiting for X to choose a target" banner — the action has resolved.
+  document.getElementById('action-waiting-banner').classList.add('hidden');
+
   // Turn banner
   const turnBanner = document.getElementById('turn-banner');
   const currentPlayerId = round.current_player_id;
@@ -297,16 +315,41 @@ function statusBadge(ps, isCurrentPlayer = false) {
 function renderOpponent(playerInfo, ps, isCurrentPlayer = false) {
   const div = document.createElement('div');
   div.className = 'opponent-row' + (isCurrentPlayer ? ' opponent-active-turn' : '');
+
+  const cardCount = ps.card_count ?? ps.cards_in_hand.length;
+  const cardsHtml = ps.cards_in_hand.length
+    ? `<div class="opponent-hand">${ps.cards_in_hand.map(c => `<span class="card-chip card-${c.card_type}">${cardLabel(c)}</span>`).join('')}</div>`
+    : '<div class="opponent-hand"><span class="hint">No cards yet</span></div>';
+
   div.innerHTML = `
     <div class="opponent-name">${escHtml(playerInfo.name)} ${statusBadge(ps, isCurrentPlayer)}</div>
     <div class="opponent-stats">
-      <span>${ps.card_count ?? ps.cards_in_hand.length} cards</span>
+      <span>${cardCount} card${cardCount !== 1 ? 's' : ''}</span>
       <span>Round: <strong>${ps.round_score}</strong></span>
       <span>Total: <strong>${ps.total_score}</strong></span>
       ${ps.has_second_chance ? '<span class="badge badge-sc">SC</span>' : ''}
     </div>
+    ${cardsHtml}
   `;
   return div;
+}
+
+function cycleCardSort() {
+  const idx = SORT_MODES.indexOf(cardSortMode);
+  cardSortMode = SORT_MODES[(idx + 1) % SORT_MODES.length];
+  if (lastState) renderGameState(lastState);
+}
+
+const TYPE_ORDER = { number: 0, modifier: 1, action: 2 };
+
+function sortedCards(cards) {
+  if (cardSortMode === 'original') return [...cards];
+  return [...cards].sort((a, b) => {
+    const typeA = TYPE_ORDER[a.card_type] ?? 9;
+    const typeB = TYPE_ORDER[b.card_type] ?? 9;
+    if (typeA !== typeB) return typeA - typeB;
+    return (b.value ?? 0) - (a.value ?? 0);
+  });
 }
 
 function renderMyPanel(playerInfo, ps, state) {
@@ -316,9 +359,10 @@ function renderMyPanel(playerInfo, ps, state) {
   const round = state.current_round;
   const isMyTurn = round && round.current_player_id === state.your_player_id;
 
-  // Hand display
-  const handHtml = ps.cards_in_hand.length
-    ? ps.cards_in_hand.map(c => `<span class="card-chip card-${c.card_type}">${cardLabel(c)}</span>`).join('')
+  // Hand display (respect current sort mode)
+  const displayCards = sortedCards(ps.cards_in_hand);
+  const handHtml = displayCards.length
+    ? displayCards.map(c => `<span class="card-chip card-${c.card_type}">${cardLabel(c)}</span>`).join('')
     : '<span class="hint">No cards yet</span>';
 
   // Score breakdown text
@@ -334,8 +378,14 @@ function renderMyPanel(playerInfo, ps, state) {
     ? `🎲 Draw Card (forced, ${ps.flip_three_count} left)`
     : '🎲 Draw Card';
 
+  const sortLabel = SORT_LABELS[cardSortMode];
+
   div.innerHTML = `
     <div class="my-name">${escHtml(playerInfo.name)} ${statusBadge(ps, isMyTurn)}</div>
+    <div class="hand-header">
+      <span class="hand-label">Cards in hand</span>
+      <button class="btn btn-sort btn-small" onclick="cycleCardSort()">${sortLabel}</button>
+    </div>
     <div class="my-hand">${handHtml}</div>
     <div class="my-score">${scoreText}</div>
     ${canAct ? `
@@ -361,7 +411,22 @@ function renderRoundEnd(state) {
   const lastRound = history[history.length - 1];
   const roundNum  = lastRound.round_number;
 
-  document.getElementById('round-end-title').textContent = `Round ${roundNum} Complete`;
+  const isFlip7 = lastRound.end_reason === 'flip_7';
+  const titleEl = document.getElementById('round-end-title');
+  const bannerEl = document.getElementById('round-end-flip7-banner');
+
+  if (isFlip7) {
+    const winner = state.players.find(p => lastRound.winner_ids.includes(p.player_id));
+    const winnerName = winner ? escHtml(winner.name) : 'A player';
+    titleEl.innerHTML = '🎉 FLIP 7!';
+    if (bannerEl) {
+      bannerEl.innerHTML = `<strong>${winnerName}</strong> collected all 7 unique number cards and earned a 15-point bonus!`;
+      bannerEl.classList.remove('hidden');
+    }
+  } else {
+    titleEl.textContent = `Round ${roundNum} Complete`;
+    if (bannerEl) bannerEl.classList.add('hidden');
+  }
 
   const scoresEl = document.getElementById('round-end-scores');
   scoresEl.innerHTML = '';

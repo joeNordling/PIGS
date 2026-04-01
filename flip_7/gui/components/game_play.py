@@ -3,7 +3,7 @@ Game play component for active game tracking.
 """
 
 import streamlit as st
-from flip_7.data.models import NumberCard, ActionCard, ActionType
+from flip_7.data.models import NumberCard, ActionCard, ActionType, RoundEndReason
 from flip_7.core.rules import calculate_score
 from flip_7.gui.components.card_picker import get_card_display
 from flip_7.data.persistence import GameRepository
@@ -87,9 +87,20 @@ def _show_game_complete(game_state):
 
 def _show_round_complete(game_state, engine):
     """Show round complete screen and start new round button."""
-    st.title(f"📊 Round {len(game_state.round_history)} Complete")
-
     last_round = game_state.round_history[-1]
+
+    # Flip 7 celebration
+    if last_round.end_reason == RoundEndReason.FLIP_7:
+        flip_7_player = next(
+            (p for p in game_state.players if p.player_id in last_round.winner_ids), None
+        )
+        name = flip_7_player.name if flip_7_player else "A player"
+        st.balloons()
+        st.title("🎉 FLIP 7!")
+        st.success(f"**{name}** collected all 7 unique number cards and earned a 15-point bonus!")
+        st.markdown("---")
+    else:
+        st.title(f"📊 Round {last_round.round_number} Complete")
 
     # Show round results
     st.markdown("### Round Results")
