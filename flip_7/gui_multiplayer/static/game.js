@@ -200,7 +200,8 @@ function handleMessage(msg) {
       break;
 
     case 'round_ended':
-      renderRoundEnd(msg.state);
+      renderRoundEndingBoard(msg.state);
+      setTimeout(() => renderRoundEnd(msg.state), 3000);
       break;
 
     case 'game_over':
@@ -397,6 +398,72 @@ function renderMyPanel(playerInfo, ps, state) {
     ` : (!ps.has_stayed && !ps.is_busted ? '<p class="hint waiting-hint">⏳ Waiting for your turn…</p>' : '')}
   `;
   return div;
+}
+
+// =============================================================================
+// Round ending board — shows final state + reason before score screen
+// =============================================================================
+
+const END_REASON_LABELS = {
+  all_stayed:    '✋ All players have stayed',
+  player_busted: '💥 A player busted!',
+  deck_exhausted:'🃏 Deck exhausted',
+  flip_7:        '🎉 FLIP 7!',
+};
+
+function renderRoundEndingBoard(state) {
+  lastState = state;
+  showScreen('screen-game');
+
+  const history = state.round_history;
+  if (!history || history.length === 0) return;
+  const round = history[history.length - 1];
+
+  document.getElementById('game-round-display').textContent = `Round ${round.round_number}`;
+  document.getElementById('game-deck-display').textContent  = `Cards: ${round.cards_remaining_in_deck}`;
+  document.getElementById('action-waiting-banner').classList.add('hidden');
+
+  // Show end reason in the turn banner
+  const turnBanner = document.getElementById('turn-banner');
+  const reasonLabel = END_REASON_LABELS[round.end_reason] ?? 'Round over';
+  turnBanner.textContent = `Round ended — ${reasonLabel}`;
+  turnBanner.className = 'turn-banner turn-other';
+  turnBanner.classList.remove('hidden');
+
+  // Render all players from the completed round (no action buttons)
+  const opponentsPanel = document.getElementById('opponents-panel');
+  opponentsPanel.innerHTML = '';
+  state.players.forEach(player => {
+    if (player.player_id === state.your_player_id) return;
+    const ps = round.player_states[player.player_id];
+    if (!ps) return;
+    opponentsPanel.appendChild(renderOpponent(player, ps, false));
+  });
+
+  const myInfo = state.players.find(p => p.player_id === state.your_player_id);
+  const myPs   = round.player_states[state.your_player_id];
+  const myPanel = document.getElementById('my-panel');
+  myPanel.innerHTML = '';
+  if (myInfo && myPs) {
+    // Render my panel without action buttons (round is over)
+    const div = document.createElement('div');
+    div.className = 'my-panel-inner';
+    const displayCards = sortedCards(myPs.cards_in_hand);
+    const handHtml = displayCards.length
+      ? displayCards.map(c => `<span class="card-chip card-${c.card_type}">${cardLabel(c)}</span>`).join('')
+      : '<span class="hint">No cards</span>';
+    const sortLabel = SORT_LABELS[cardSortMode];
+    div.innerHTML = `
+      <div class="my-name">${escHtml(myInfo.name)} ${statusBadge(myPs, false)}</div>
+      <div class="hand-header">
+        <span class="hand-label">Cards in hand</span>
+        <button class="btn btn-sort btn-small" onclick="cycleCardSort()">${sortLabel}</button>
+      </div>
+      <div class="my-hand">${handHtml}</div>
+      <div class="my-score">Round score: <strong>${myPs.round_score}</strong> &nbsp;|&nbsp; Total: <strong>${myPs.total_score}</strong></div>
+    `;
+    myPanel.appendChild(div);
+  }
 }
 
 // =============================================================================
