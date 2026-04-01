@@ -197,14 +197,18 @@ async def _dispatch(
 async def _handle_deal_card(
     game_id: str, player_id: str, data: dict, engine
 ) -> None:
-    """Deal a card to the requesting player."""
-    card_dict = data["card"]
-    _validate_card_dict(card_dict)
-    card = deserialize_card(card_dict)
+    """Draw a random card from the deck for the requesting player."""
+    current_round = engine.game_state.current_round
+    if (
+        current_round is not None
+        and current_round.current_player_id is not None
+        and current_round.current_player_id != player_id
+    ):
+        raise ValueError("It is not your turn")
 
-    engine.deal_card_to_player(player_id, card)
+    drawn_card = engine.deal_card_to_player(player_id)
 
-    if isinstance(card, ActionCard):
+    if isinstance(drawn_card, ActionCard):
         # Pause broadcasting and wait for the player to choose a target.
         current_round = engine.game_state.current_round
         eligible = []
@@ -216,13 +220,13 @@ async def _handle_deal_card(
             ]
 
         room_manager.pending_action[game_id] = {
-            "card": card,
+            "card": drawn_card,
             "owner_player_id": player_id,
         }
 
         await room_manager.broadcast(game_id, {
             "type": "action_pending",
-            "action_type": card.action_type.value,
+            "action_type": drawn_card.action_type.value,
             "owner_player_id": player_id,
             "eligible_targets": eligible,
         })
@@ -251,6 +255,14 @@ async def _handle_stay(
     game_id: str, player_id: str, data: dict, engine
 ) -> None:
     """Mark the requesting player as staying this round."""
+    current_round = engine.game_state.current_round
+    if (
+        current_round is not None
+        and current_round.current_player_id is not None
+        and current_round.current_player_id != player_id
+    ):
+        raise ValueError("It is not your turn")
+
     engine.player_stay(player_id)
     await room_manager.broadcast_state(game_id, _infer_message_type(engine))
 

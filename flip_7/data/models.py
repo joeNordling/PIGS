@@ -9,6 +9,8 @@ round states, and game states. These models are designed to be:
 - Reusable for both manual game tracking and future simulations
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -56,6 +58,7 @@ class RoundEndReason(Enum):
     ALL_STAYED = "all_stayed"
     PLAYER_BUSTED = "player_busted"
     DECK_EXHAUSTED = "deck_exhausted"
+    FLIP_7 = "flip_7"
 
 
 # ============================================================================
@@ -194,6 +197,26 @@ class ScoreBreakdown:
 
 
 # ============================================================================
+# Turn Management
+# ============================================================================
+
+@dataclass
+class PendingEffect:
+    """
+    A pending effect that interrupts normal turn rotation.
+
+    When a Flip Three card is played on an opponent, their forced draws
+    are inserted into the turn order immediately via this stack entry.
+
+    Attributes:
+        effect_type: Type of effect ("flip_three")
+        target_id: Player ID who must resolve the effect
+    """
+    effect_type: str
+    target_id: str
+
+
+# ============================================================================
 # Player State
 # ============================================================================
 
@@ -260,6 +283,8 @@ class RoundState:
         is_complete: Whether this round has ended
         end_reason: Why the round ended (if complete)
         winner_ids: IDs of players who won this round (if multiple tied)
+        current_player_id: ID of the player whose turn it currently is
+        effect_stack: Pending effects that interrupt normal turn rotation
     """
     round_number: int
     dealer_id: str
@@ -268,6 +293,8 @@ class RoundState:
     is_complete: bool = False
     end_reason: Optional[RoundEndReason] = None
     winner_ids: List[str] = field(default_factory=list)
+    current_player_id: Optional[str] = None
+    effect_stack: List[PendingEffect] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
@@ -278,7 +305,9 @@ class RoundState:
             "cards_remaining_in_deck": self.cards_remaining_in_deck,
             "is_complete": self.is_complete,
             "end_reason": self.end_reason.value if self.end_reason else None,
-            "winner_ids": self.winner_ids
+            "winner_ids": self.winner_ids,
+            "current_player_id": self.current_player_id,
+            "effect_stack": [{"effect_type": e.effect_type, "target_id": e.target_id} for e in self.effect_stack],
         }
 
 

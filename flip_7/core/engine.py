@@ -5,6 +5,7 @@ This module implements the core game flow logic, managing state transitions,
 validating actions, and coordinating between rules, events, and state.
 """
 
+import random
 from copy import deepcopy
 from typing import List, Optional, Tuple
 from uuid import uuid4
@@ -12,7 +13,7 @@ from uuid import uuid4
 from flip_7.data.models import (
     GameState, RoundState, PlayerState, PlayerInfo,
     Card, NumberCard, ActionCard, ModifierCard,
-    ActionType, RoundEndReason,
+    ActionType, RoundEndReason, PendingEffect,
 )
 from flip_7.data.events import (
     EventLogger, GameStartedEvent, RoundStartedEvent,
@@ -164,10 +165,11 @@ class GameEngine:
                 if player_id in player_states:
                     player_states[player_id].total_score = last_ps.total_score
 
-        # Create round state
+        # Create round state — dealer goes first, and rotates each round
         round_state = RoundState(
             round_number=round_number,
             dealer_id=dealer.player_id,
+            current_player_id=dealer.player_id,
             player_states=player_states,
             cards_remaining_in_deck=len(self.game_state.deck)  # Use persistent deck
         )
@@ -184,16 +186,20 @@ class GameEngine:
 
         return round_state
 
-    def deal_card_to_player(self, player_id: str, card: Card) -> None:
+    def deal_card_to_player(self, player_id: str, card: Optional[Card] = None) -> Card:
         """
-        Deal a specific card to a player.
+        Deal a card to a player.
 
-        This method is for manual game logging where the user specifies
-        which card was dealt. For simulations, use a DeckManager to draw cards.
+        If no card is specified, one is drawn randomly from the deck (the normal
+        game flow). If a card is specified, that specific card is dealt (used by
+        tests and simulation engines).
 
         Args:
             player_id: ID of the player receiving the card
-            card: The card to deal
+            card: Optional specific card to deal; if None, draws randomly
+
+        Returns:
+            The card that was dealt
 
         Raises:
             ValueError: If invalid player or game state
@@ -212,12 +218,18 @@ class GameEngine:
         if not validation.is_valid:
             raise ValueError(validation.error_message)
 
-        # Find and remove a matching card from the deck
-        # For manual logging, we match by card type and value, not ID
-        card_from_deck = self._remove_card_from_deck(card)
-        if card_from_deck is None:
-            # If exact card not in deck, use the provided card (for manual override)
-            card_from_deck = card
+        if card is None:
+            # Random draw from the deck
+            card_from_deck = self._draw_random_card()
+            if card_from_deck is None:
+                raise ValueError("No cards remaining in deck")
+        else:
+            # Find and remove a matching card from the deck.
+            # For manual / test use, we match by card type and value, not ID.
+            card_from_deck = self._remove_card_from_deck(card)
+            if card_from_deck is None:
+                # Card not in deck — use the provided card directly (manual override)
+                card_from_deck = card
 
         # Check if flip_three was active BEFORE dealing this card
         # This ensures the FLIP_THREE card itself doesn't count toward the 3
@@ -261,6 +273,19 @@ class GameEngine:
         if player_state.is_busted:
             self._handle_player_bust(player_id)
 
+        # Check for Flip 7 — player collected 7 unique number cards, round ends immediately
+        if (
+            self.game_state.current_round is not None
+            and not player_state.is_busted
+            and check_round_end_condition(self.game_state.current_round)
+        ):
+            # Bank the Flip 7 player's score before ending (they didn't explicitly stay)
+            score_breakdown = calculate_score(player_state.cards_in_hand)
+            player_state.round_score = score_breakdown.final_score
+            player_state.total_score += player_state.round_score
+            self.end_round()
+            return card_from_deck
+
         # Handle Flip Three counter - only decrement for non-action cards
         # Only check counter if flip_three was ALREADY active before this card
         if flip_three_was_active and player_state.flip_three_count > 0:
@@ -269,6 +294,14 @@ class GameEngine:
                 player_state.flip_three_count -= 1
                 if player_state.flip_three_count == 0:
                     player_state.flip_three_active = False
+
+        # Advance the turn for non-action cards.
+        # Action cards advance the turn only after apply_action_card_effect() is called,
+        # because the effect (and therefore target selection) hasn't happened yet.
+        if not isinstance(card_from_deck, ActionCard) and self.game_state.current_round is not None:
+            self._advance_turn()
+
+        return card_from_deck
 
     def apply_action_card_effect(
         self,
@@ -394,9 +427,11 @@ class GameEngine:
             has_flip_7=score_breakdown.has_flip_7
         ))
 
-        # Check if round should end
+        # Check if round should end; otherwise advance to the next player
         if check_round_end_condition(current_round):
             self.end_round()
+        else:
+            self._advance_turn()
 
     def use_second_chance(self, player_id: str, card_to_discard: NumberCard) -> None:
         """
@@ -553,6 +588,14 @@ class GameEngine:
             target_state.flip_three_active = True
             target_state.flip_three_count = 3
 
+            # If the target is not the current player, push to the effect stack so
+            # _advance_turn() will interrupt normal rotation and give them the turn next.
+            current_player_id = self.game_state.current_round.current_player_id
+            if target_player_id != current_player_id:
+                self.game_state.current_round.effect_stack.insert(
+                    0, PendingEffect(effect_type="flip_three", target_id=target_player_id)
+                )
+
             # Create description based on whether it was applied to self or opponent
             if original_name and original_name != target_name:
                 description = f"{original_name} applied Flip Three to {target_name} who must accept the next 3 cards"
@@ -601,6 +644,80 @@ class GameEngine:
                     effect_description=description
                 ))
 
+        # Advance the turn after the action card's effect has been applied.
+        # _advance_turn() handles all cases: Freeze (target stayed → skip them), Flip Three
+        # (either current player stays put if self-targeted, or opponent becomes next via stack),
+        # Second Chance (drawing player's turn is done).
+        if self.game_state.current_round is not None:
+            self._advance_turn()
+
+    def _advance_turn(self) -> None:
+        """
+        Advance current_player_id to the next player who needs to act.
+
+        Resolution order:
+        1. If the current player is still in forced-draw mode (flip_three_count > 0),
+           stay on them — they haven't finished their mandatory draws yet.
+        2. Check the effect_stack for any pending interrupts (e.g. Flip Three applied
+           to an opponent). If found and the target is still active, make them current.
+        3. Otherwise, advance to the next active player in rotation order (skipping
+           anyone who has stayed or busted).
+        """
+        current_round = self.game_state.current_round
+        if current_round is None:
+            return
+
+        current_id = current_round.current_player_id
+        if current_id is None:
+            return
+
+        # 1. Current player still has forced draws remaining — keep their turn.
+        #    Exception: if they busted, always advance (bust clears their obligation).
+        current_state = current_round.player_states.get(current_id)
+        if current_state and not current_state.is_busted and current_state.flip_three_active and current_state.flip_three_count > 0:
+            return
+
+        # 2. Check the effect stack for pending interrupts.
+        while current_round.effect_stack:
+            effect = current_round.effect_stack.pop(0)
+            target_state = current_round.player_states.get(effect.target_id)
+            if target_state and not target_state.has_stayed and not target_state.is_busted:
+                current_round.current_player_id = effect.target_id
+                return
+            # Target is already done — discard this effect and keep looking.
+
+        # 3. Normal rotation: find the next active player after the current one.
+        players = self.game_state.players
+        current_index = next(
+            (i for i, p in enumerate(players) if p.player_id == current_id), 0
+        )
+
+        num_players = len(players)
+        for offset in range(1, num_players + 1):
+            next_index = (current_index + offset) % num_players
+            next_player = players[next_index]
+            next_state = current_round.player_states[next_player.player_id]
+            if not next_state.has_stayed and not next_state.is_busted:
+                current_round.current_player_id = next_player.player_id
+                return
+
+        # All players are done — round should end via check_round_end_condition.
+        current_round.current_player_id = None
+
+    def _draw_random_card(self) -> Optional[Card]:
+        """
+        Draw a random card from the top of the (pre-shuffled) deck.
+
+        Reshuffles the discard pile into the deck automatically if the deck
+        is empty. Returns None only if both deck and discard pile are empty.
+        """
+        if len(self.game_state.deck) == 0:
+            if len(self.game_state.discard_pile) > 0:
+                self._reshuffle_deck()
+            else:
+                return None
+        return self.game_state.deck.pop(0)
+
     def _update_player_score(self, player_id: str) -> None:
         """
         Update a player's current score and check for bust.
@@ -622,6 +739,32 @@ class GameEngine:
             player_state.is_busted = True
             player_state.round_score = 0  # Bust means zero points for the round
             return
+
+        if has_duplicates and player_state.has_second_chance:
+            # Auto-use Second Chance: find and discard one copy of the duplicate,
+            # then consume the Second Chance card. The player has no choice here —
+            # holding a Second Chance obligates its use to avoid the bust.
+            number_cards = [c for c in player_state.cards_in_hand if isinstance(c, NumberCard)]
+            card_values = [c.value for c in number_cards]
+            duplicate_value = next(v for v in card_values if card_values.count(v) > 1)
+            card_to_discard = next(c for c in number_cards if c.value == duplicate_value)
+            player_state.cards_in_hand.remove(card_to_discard)
+
+            second_chance_card = next(
+                c for c in player_state.cards_in_hand
+                if isinstance(c, ActionCard) and c.action_type == ActionType.SECOND_CHANCE
+            )
+            player_state.cards_in_hand.remove(second_chance_card)
+            player_state.has_second_chance = False
+
+            player_name = next(p.name for p in self.game_state.players if p.player_id == player_id)
+            self.event_logger.log_event(SecondChanceUsedEvent(
+                game_id=self.game_state.game_id,
+                player_id=player_id,
+                player_name=player_name,
+                discarded_card_value=duplicate_value,
+                round_number=self.game_state.current_round.round_number
+            ))
 
         # Calculate current round score (only if not busted)
         score_breakdown = calculate_score(player_state.cards_in_hand)

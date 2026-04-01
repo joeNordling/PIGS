@@ -1,1 +1,3 @@
 - [ ] Copy room code button does not work
+- [ ] Does not properly identify a flip 7 (when you get 7 unique cards)
+- [ ] Needs to handle busting on a second chance

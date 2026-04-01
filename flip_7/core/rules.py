@@ -340,7 +340,8 @@ def check_round_end_condition(round_state: RoundState) -> bool:
 
     Round ends when:
     1. All players have stayed or busted, OR
-    2. Deck is exhausted
+    2. Deck is exhausted, OR
+    3. Any player has achieved Flip 7 (exactly 7 number cards)
 
     Args:
         round_state: The current round state
@@ -361,6 +362,11 @@ def check_round_end_condition(round_state: RoundState) -> bool:
     if round_state.cards_remaining_in_deck <= 0:
         return True
 
+    # Check if any player has achieved Flip 7
+    for ps in round_state.player_states.values():
+        if not ps.is_busted and check_flip_7(ps.cards_in_hand):
+            return True
+
     return False
 
 
@@ -375,6 +381,10 @@ def determine_round_end_reason(round_state: RoundState) -> Optional['RoundEndRea
         The reason the round ended
     """
     from flip_7.data.models import RoundEndReason
+
+    # Check for Flip 7 first — takes priority over other reasons
+    if any(not ps.is_busted and check_flip_7(ps.cards_in_hand) for ps in round_state.player_states.values()):
+        return RoundEndReason.FLIP_7
 
     # Check for bust
     if any(ps.is_busted for ps in round_state.player_states.values()):

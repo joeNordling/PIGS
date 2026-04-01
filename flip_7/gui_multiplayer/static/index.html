@@ -68,6 +68,9 @@
       <span id="game-deck-display" class="game-meta">Cards: —</span>
     </header>
 
+    <!-- Turn announcement -->
+    <div id="turn-banner" class="turn-banner hidden"></div>
+
     <div class="game-body">
 
       <!-- Opponents -->
@@ -80,19 +83,6 @@
       <section class="my-section">
         <h3 class="section-label">Your Hand</h3>
         <div id="my-panel"></div>
-
-        <!-- Inline card picker (shown on "Deal Card" click) -->
-        <div id="card-picker" class="card-picker hidden">
-          <div class="picker-tabs">
-            <button class="tab-btn active" onclick="showPickerTab('numbers')">Numbers</button>
-            <button class="tab-btn" onclick="showPickerTab('modifiers')">Modifiers</button>
-            <button class="tab-btn" onclick="showPickerTab('actions')">Actions</button>
-          </div>
-          <div id="picker-numbers"  class="picker-grid"></div>
-          <div id="picker-modifiers" class="picker-grid hidden"></div>
-          <div id="picker-actions"  class="picker-grid hidden"></div>
-          <button class="btn btn-ghost btn-full" onclick="hideCardPicker()">Cancel</button>
-        </div>
       </section>
 
     </div>

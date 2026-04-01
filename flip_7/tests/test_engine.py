@@ -351,35 +351,33 @@ class TestPlayerActions:
         with pytest.raises(ValueError, match="already stayed"):
             engine.player_stay(player_id)
 
-    def test_use_second_chance(self):
-        """Test using Second Chance to discard a duplicate."""
+    def test_second_chance_auto_used_on_duplicate(self):
+        """Test that Second Chance is automatically used when a duplicate is drawn."""
         engine = GameEngine()
         game_state = engine.start_new_game(["Alice", "Bob"])
         engine.start_new_round()
 
         player_id = game_state.players[0].player_id
 
-        # Deal Second Chance card and apply it
+        # Give player a Second Chance card
         sc_card = ActionCard(action_type=ActionType.SECOND_CHANCE)
         engine.deal_card_to_player(player_id, sc_card)
         engine.apply_action_card_effect(sc_card, player_id, player_id)
 
-        # Deal two duplicates
+        # Draw a number card, then a duplicate of it
         engine.deal_card_to_player(player_id, NumberCard(value=12))
-        engine.deal_card_to_player(player_id, NumberCard(value=12))
+        engine.deal_card_to_player(player_id, NumberCard(value=12))  # triggers auto-use
 
         player_state = game_state.current_round.player_states[player_id]
-        initial_card_count = len(player_state.cards_in_hand)
 
-        # Get the actual card from player's hand (not the one we created)
-        duplicate_card = next(c for c in player_state.cards_in_hand if isinstance(c, NumberCard))
-
-        # Use Second Chance
-        engine.use_second_chance(player_id, duplicate_card)
-
-        # Should have removed both the duplicate and Second Chance card
-        assert len(player_state.cards_in_hand) == initial_card_count - 2
+        # Player should NOT be busted — Second Chance was auto-used
+        assert player_state.is_busted is False
+        # Second Chance card and one duplicate should both be gone
         assert player_state.has_second_chance is False
+        number_values = [c.value for c in player_state.cards_in_hand if isinstance(c, NumberCard)]
+        assert number_values.count(12) == 1  # only one 12 remains
+        # Player can still draw
+        assert game_state.current_round is not None
 
 
 class TestBustDetection:
@@ -728,3 +726,216 @@ class TestActionCardTargeting:
         # Alice tries to apply to Bob who has stayed - should fail
         with pytest.raises(ValueError, match="already stayed"):
             engine.apply_action_card_effect(flip_three_card, bob_id, alice_id)
+
+
+class TestTurnOrder:
+    """Test turn-order management and random card drawing."""
+
+    def test_first_player_is_dealer(self):
+        """Test that the dealer is the first player to act each round."""
+        engine = GameEngine()
+        engine.start_new_game(["Alice", "Bob", "Charlie"])
+        round_state = engine.start_new_round()
+
+        assert round_state.current_player_id == round_state.dealer_id
+
+    def test_turn_advances_after_draw(self):
+        """Test that the turn moves to the next player after drawing a non-action card."""
+        engine = GameEngine()
+        game_state = engine.start_new_game(["Alice", "Bob", "Charlie"])
+        round_state = engine.start_new_round()
+
+        alice_id = game_state.players[0].player_id
+        bob_id = game_state.players[1].player_id
+
+        # Alice is dealer (round 1, player index 0)
+        assert round_state.current_player_id == alice_id
+
+        engine.deal_card_to_player(alice_id, NumberCard(value=5))
+
+        # Turn should have advanced to Bob
+        assert round_state.current_player_id == bob_id
+
+    def test_turn_advances_after_stay(self):
+        """Test that the turn moves to the next player after staying."""
+        engine = GameEngine()
+        game_state = engine.start_new_game(["Alice", "Bob", "Charlie"])
+        round_state = engine.start_new_round()
+
+        alice_id = game_state.players[0].player_id
+        bob_id = game_state.players[1].player_id
+
+        engine.deal_card_to_player(alice_id, NumberCard(value=5))
+        engine.player_stay(bob_id)  # Bob stays after Alice's draw
+
+        # Turn should advance past Bob (stayed) to Charlie
+        charlie_id = game_state.players[2].player_id
+        assert round_state.current_player_id == charlie_id
+
+    def test_turn_skips_busted_players(self):
+        """Test that busted players are skipped in rotation after they bust."""
+        engine = GameEngine()
+        game_state = engine.start_new_game(["Alice", "Bob", "Charlie"])
+        round_state = engine.start_new_round()
+
+        alice_id = game_state.players[0].player_id
+        bob_id = game_state.players[1].player_id
+        charlie_id = game_state.players[2].player_id
+
+        # One full rotation: Alice → Bob → Charlie → Alice → Bob
+        engine.deal_card_to_player(alice_id, NumberCard(value=5))    # turn → Bob
+        engine.deal_card_to_player(bob_id, NumberCard(value=9))      # turn → Charlie
+        engine.deal_card_to_player(charlie_id, NumberCard(value=3))  # turn → Alice
+        engine.deal_card_to_player(alice_id, NumberCard(value=6))    # turn → Bob
+
+        # Bob draws a duplicate 9 — busts; _advance_turn skips Bob → Charlie
+        engine.deal_card_to_player(bob_id, NumberCard(value=9))
+
+        assert game_state.current_round.player_states[bob_id].is_busted
+        assert round_state.current_player_id == charlie_id
+
+    def test_dealer_rotates_each_round(self):
+        """Test that the first player (dealer) rotates each round."""
+        engine = GameEngine()
+        game_state = engine.start_new_game(["Alice", "Bob", "Charlie"])
+
+        round1 = engine.start_new_round()
+        first_player_r1 = round1.current_player_id
+
+        # End round manually
+        round1.is_complete = True
+        game_state.round_history.append(round1)
+        game_state.current_round = None
+
+        round2 = engine.start_new_round()
+        first_player_r2 = round2.current_player_id
+
+        assert first_player_r1 != first_player_r2
+
+    def test_flip_three_on_opponent_interrupts_rotation(self):
+        """Test that Flip Three applied to an opponent makes them go next."""
+        engine = GameEngine()
+        game_state = engine.start_new_game(["Alice", "Bob", "Charlie"])
+        round_state = engine.start_new_round()
+
+        alice_id = game_state.players[0].player_id
+        bob_id = game_state.players[1].player_id
+        charlie_id = game_state.players[2].player_id
+
+        # Alice draws Flip Three and applies it to Charlie (skipping Bob)
+        flip_three_card = ActionCard(action_type=ActionType.FLIP_THREE)
+        engine.deal_card_to_player(alice_id, flip_three_card)
+        engine.apply_action_card_effect(flip_three_card, charlie_id, alice_id)
+
+        # Charlie should be next (not Bob), because Flip Three interrupts rotation
+        assert round_state.current_player_id == charlie_id
+
+    def test_flip_three_on_self_keeps_current_player(self):
+        """Test that Flip Three applied to self keeps current player's turn."""
+        engine = GameEngine()
+        game_state = engine.start_new_game(["Alice", "Bob"])
+        round_state = engine.start_new_round()
+
+        alice_id = game_state.players[0].player_id
+
+        # Alice draws Flip Three and applies to self
+        flip_three_card = ActionCard(action_type=ActionType.FLIP_THREE)
+        engine.deal_card_to_player(alice_id, flip_three_card)
+        engine.apply_action_card_effect(flip_three_card, alice_id, alice_id)
+
+        # Alice is still current player (must draw 3 more)
+        assert round_state.current_player_id == alice_id
+
+    def test_flip_three_forced_draws_keep_current_player(self):
+        """Test that current player stays active while resolving forced Flip Three draws."""
+        engine = GameEngine()
+        game_state = engine.start_new_game(["Alice", "Bob"])
+        round_state = engine.start_new_round()
+
+        alice_id = game_state.players[0].player_id
+        bob_id = game_state.players[1].player_id
+
+        flip_three_card = ActionCard(action_type=ActionType.FLIP_THREE)
+        engine.deal_card_to_player(alice_id, flip_three_card)
+        engine.apply_action_card_effect(flip_three_card, alice_id, alice_id)
+
+        # Draw 1 of 3 — Alice should still be current
+        engine.deal_card_to_player(alice_id, NumberCard(value=3))
+        assert round_state.current_player_id == alice_id
+
+        # Draw 2 of 3 — Alice should still be current
+        engine.deal_card_to_player(alice_id, NumberCard(value=4))
+        assert round_state.current_player_id == alice_id
+
+        # Draw 3 of 3 — turn advances to Bob
+        engine.deal_card_to_player(alice_id, NumberCard(value=5))
+        assert round_state.current_player_id == bob_id
+
+    def test_bust_during_flip_three_advances_turn(self):
+        """Test that busting during a forced Flip Three draw ends the player's turn."""
+        engine = GameEngine()
+        game_state = engine.start_new_game(["Alice", "Bob"])
+        round_state = engine.start_new_round()
+
+        alice_id = game_state.players[0].player_id
+        bob_id = game_state.players[1].player_id
+
+        # Alice gets Flip Three applied to herself
+        flip_three_card = ActionCard(action_type=ActionType.FLIP_THREE)
+        engine.deal_card_to_player(alice_id, flip_three_card)
+        engine.apply_action_card_effect(flip_three_card, alice_id, alice_id)
+        assert round_state.current_player_id == alice_id
+
+        # Alice draws a number card (first of 3 forced draws)
+        engine.deal_card_to_player(alice_id, NumberCard(value=9))
+        assert round_state.current_player_id == alice_id  # still Alice's turn
+
+        # Alice draws a duplicate — busts mid-Flip Three
+        engine.deal_card_to_player(alice_id, NumberCard(value=9))
+
+        alice_state = game_state.current_round.player_states[alice_id]
+        assert alice_state.is_busted
+        # Turn must advance to Bob — not stay stuck on Alice
+        assert round_state.current_player_id == bob_id
+
+    def test_flip_7_ends_round_immediately(self):
+        """Test that drawing a 7th unique number card ends the round with a 15-point bonus."""
+        engine = GameEngine()
+        game_state = engine.start_new_game(["Alice", "Bob"])
+        engine.start_new_round()
+
+        alice_id = game_state.players[0].player_id
+
+        # Alice draws 6 unique number cards
+        for v in range(1, 7):
+            engine.deal_card_to_player(alice_id, NumberCard(value=v))
+
+        assert game_state.current_round is not None  # round still active
+
+        # 7th unique number card triggers Flip 7
+        engine.deal_card_to_player(alice_id, NumberCard(value=7))
+
+        # Round should have ended
+        assert game_state.current_round is None
+        assert len(game_state.round_history) == 1
+
+        alice_state = game_state.round_history[0].player_states[alice_id]
+        # base = 1+2+3+4+5+6+7 = 28, flip_7_bonus = 15 → 43
+        assert alice_state.round_score == 43
+        assert game_state.round_history[0].end_reason.value == "flip_7"
+
+    def test_random_draw_returns_card_from_deck(self):
+        """Test that deal_card_to_player with no card argument draws from the deck."""
+        engine = GameEngine()
+        game_state = engine.start_new_game(["Alice", "Bob"])
+        engine.start_new_round()
+
+        alice_id = game_state.players[0].player_id
+        initial_deck_size = len(game_state.deck)
+
+        drawn = engine.deal_card_to_player(alice_id)
+
+        assert drawn is not None
+        assert len(game_state.deck) == initial_deck_size - 1
+        player_state = game_state.current_round.player_states[alice_id]
+        assert drawn in player_state.cards_in_hand

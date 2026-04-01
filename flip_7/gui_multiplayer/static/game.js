@@ -9,11 +9,10 @@
 // Module state
 // =============================================================================
 
-let myPlayerId   = null;
-let myGameId     = null;
-let ws           = null;
-let lastState    = null;
-let isPickerOpen = false;
+let myPlayerId = null;
+let myGameId   = null;
+let ws         = null;
+let lastState  = null;
 
 // =============================================================================
 // Screen management
@@ -241,6 +240,31 @@ function renderGameState(state) {
   document.getElementById('game-round-display').textContent = `Round ${round.round_number}`;
   document.getElementById('game-deck-display').textContent  = `Cards: ${round.cards_remaining_in_deck}`;
 
+  // Turn banner
+  const turnBanner = document.getElementById('turn-banner');
+  const currentPlayerId = round.current_player_id;
+  if (currentPlayerId) {
+    const currentPlayer = state.players.find(p => p.player_id === currentPlayerId);
+    const currentPs = round.player_states[currentPlayerId];
+    if (currentPlayer && currentPs) {
+      const isMe = currentPlayerId === state.your_player_id;
+      if (currentPs.flip_three_active) {
+        turnBanner.textContent = isMe
+          ? `⚠️ Your turn — FORCED DRAW (${currentPs.flip_three_count} card(s) remaining)`
+          : `⚠️ ${escHtml(currentPlayer.name)}'s turn — FORCED DRAW (${currentPs.flip_three_count} card(s) remaining)`;
+        turnBanner.className = 'turn-banner turn-forced';
+      } else {
+        turnBanner.textContent = isMe
+          ? '🎯 Your turn — Draw a card or Stay'
+          : `🎯 ${escHtml(currentPlayer.name)}'s turn`;
+        turnBanner.className = isMe ? 'turn-banner turn-mine' : 'turn-banner turn-other';
+      }
+      turnBanner.classList.remove('hidden');
+    }
+  } else {
+    turnBanner.classList.add('hidden');
+  }
+
   // Opponents
   const opponentsPanel = document.getElementById('opponents-panel');
   opponentsPanel.innerHTML = '';
@@ -248,7 +272,8 @@ function renderGameState(state) {
     if (player.player_id === state.your_player_id) return;
     const ps = round.player_states[player.player_id];
     if (!ps) return;
-    opponentsPanel.appendChild(renderOpponent(player, ps));
+    const isCurrentPlayer = player.player_id === currentPlayerId;
+    opponentsPanel.appendChild(renderOpponent(player, ps, isCurrentPlayer));
   });
 
   // My panel
@@ -261,18 +286,19 @@ function renderGameState(state) {
   }
 }
 
-function statusBadge(ps) {
-  if (ps.is_busted)        return '<span class="badge badge-bust">BUSTED</span>';
-  if (ps.has_stayed)       return '<span class="badge badge-stay">STAYED</span>';
+function statusBadge(ps, isCurrentPlayer = false) {
+  if (ps.is_busted)         return '<span class="badge badge-bust">BUSTED</span>';
+  if (ps.has_stayed)        return '<span class="badge badge-stay">STAYED</span>';
   if (ps.flip_three_active) return `<span class="badge badge-flip">FLIP THREE (${ps.flip_three_count} left)</span>`;
+  if (isCurrentPlayer)      return '<span class="badge badge-turn">YOUR TURN</span>';
   return '<span class="badge badge-active">ACTIVE</span>';
 }
 
-function renderOpponent(playerInfo, ps) {
+function renderOpponent(playerInfo, ps, isCurrentPlayer = false) {
   const div = document.createElement('div');
-  div.className = 'opponent-row';
+  div.className = 'opponent-row' + (isCurrentPlayer ? ' opponent-active-turn' : '');
   div.innerHTML = `
-    <div class="opponent-name">${escHtml(playerInfo.name)} ${statusBadge(ps)}</div>
+    <div class="opponent-name">${escHtml(playerInfo.name)} ${statusBadge(ps, isCurrentPlayer)}</div>
     <div class="opponent-stats">
       <span>${ps.card_count ?? ps.cards_in_hand.length} cards</span>
       <span>Round: <strong>${ps.round_score}</strong></span>
@@ -287,6 +313,9 @@ function renderMyPanel(playerInfo, ps, state) {
   const div = document.createElement('div');
   div.className = 'my-panel-inner';
 
+  const round = state.current_round;
+  const isMyTurn = round && round.current_player_id === state.your_player_id;
+
   // Hand display
   const handHtml = ps.cards_in_hand.length
     ? ps.cards_in_hand.map(c => `<span class="card-chip card-${c.card_type}">${cardLabel(c)}</span>`).join('')
@@ -298,22 +327,24 @@ function renderMyPanel(playerInfo, ps, state) {
     scoreText += ` &nbsp;|&nbsp; <span class="badge badge-flip">Must draw ${ps.flip_three_count} more</span>`;
   }
 
-  // Action buttons
-  const canAct    = !ps.has_stayed && !ps.is_busted;
-  const canStay   = canAct && !(ps.flip_three_active && ps.flip_three_count > 0);
-  const dealLabel = ps.flip_three_active ? `Draw Required Card (${ps.flip_three_count} left)` : 'Deal Card';
+  // Action buttons — only shown when it's this player's turn
+  const canAct  = isMyTurn && !ps.has_stayed && !ps.is_busted;
+  const canStay = canAct && !(ps.flip_three_active && ps.flip_three_count > 0);
+  const drawLabel = ps.flip_three_active
+    ? `🎲 Draw Card (forced, ${ps.flip_three_count} left)`
+    : '🎲 Draw Card';
 
   div.innerHTML = `
-    <div class="my-name">${escHtml(playerInfo.name)} ${statusBadge(ps)}</div>
+    <div class="my-name">${escHtml(playerInfo.name)} ${statusBadge(ps, isMyTurn)}</div>
     <div class="my-hand">${handHtml}</div>
     <div class="my-score">${scoreText}</div>
     ${canAct ? `
       <div class="action-buttons">
-        <button class="btn btn-deal" onclick="toggleCardPicker()">${dealLabel}</button>
-        <button class="btn btn-stay" onclick="sendStay()" ${canStay ? '' : 'disabled'}>Stay</button>
-        ${ps.has_second_chance ? '<button class="btn btn-sc" onclick="openSecondChance()">Use Second Chance</button>' : ''}
+        <button class="btn btn-deal" onclick="sendDrawCard()">${drawLabel}</button>
+        <button class="btn btn-stay" onclick="sendStay()" ${canStay ? '' : 'disabled'}>✋ Stay</button>
+        ${ps.has_second_chance ? '<button class="btn btn-sc" onclick="openSecondChance()">🎯 Use Second Chance</button>' : ''}
       </div>
-    ` : ''}
+    ` : (!ps.has_stayed && !ps.is_busted ? '<p class="hint waiting-hint">⏳ Waiting for your turn…</p>' : '')}
   `;
   return div;
 }
@@ -470,81 +501,6 @@ function openSecondChance() {
   openModal('screen-second-chance');
 }
 
-// =============================================================================
-// Card picker
-// =============================================================================
-
-function toggleCardPicker() {
-  const picker = document.getElementById('card-picker');
-  isPickerOpen = !isPickerOpen;
-  picker.classList.toggle('hidden', !isPickerOpen);
-  if (isPickerOpen) showPickerTab('numbers');
-}
-
-function hideCardPicker() {
-  isPickerOpen = false;
-  document.getElementById('card-picker').classList.add('hidden');
-}
-
-function showPickerTab(tab) {
-  ['numbers', 'modifiers', 'actions'].forEach(t => {
-    document.getElementById(`picker-${t}`).classList.toggle('hidden', t !== tab);
-  });
-  document.querySelectorAll('.tab-btn').forEach((btn, i) => {
-    btn.classList.toggle('active', ['numbers', 'modifiers', 'actions'][i] === tab);
-  });
-}
-
-function pickCard(cardDict) {
-  hideCardPicker();
-  sendDealCard(cardDict);
-}
-
-/** Populate the card picker grids once on page load. */
-function initCardPicker() {
-  // Numbers 0–12
-  const numGrid = document.getElementById('picker-numbers');
-  for (let v = 0; v <= 12; v++) {
-    const btn = document.createElement('button');
-    btn.className = 'btn card-btn card-number';
-    btn.textContent = v;
-    btn.onclick = () => pickCard({ card_type: 'number', value: v });
-    numGrid.appendChild(btn);
-  }
-
-  // Modifiers
-  const modGrid = document.getElementById('picker-modifiers');
-  const modifiers = [
-    { label: '+2',  dict: { card_type: 'modifier', modifier_type: 'plus_2',     value: 2  } },
-    { label: '+4',  dict: { card_type: 'modifier', modifier_type: 'plus_4',     value: 4  } },
-    { label: '+6',  dict: { card_type: 'modifier', modifier_type: 'plus_6',     value: 6  } },
-    { label: '+8',  dict: { card_type: 'modifier', modifier_type: 'plus_8',     value: 8  } },
-    { label: '+10', dict: { card_type: 'modifier', modifier_type: 'plus_10',    value: 10 } },
-    { label: '×2',  dict: { card_type: 'modifier', modifier_type: 'multiply_2', value: 2  } },
-  ];
-  modifiers.forEach(({ label, dict }) => {
-    const btn = document.createElement('button');
-    btn.className = 'btn card-btn card-modifier';
-    btn.textContent = label;
-    btn.onclick = () => pickCard(dict);
-    modGrid.appendChild(btn);
-  });
-
-  // Actions
-  const actGrid = document.getElementById('picker-actions');
-  const actions = [
-    { label: 'Freeze',        dict: { card_type: 'action', action_type: 'freeze'        } },
-    { label: 'Flip Three',    dict: { card_type: 'action', action_type: 'flip_three'    } },
-    { label: 'Second Chance', dict: { card_type: 'action', action_type: 'second_chance' } },
-  ];
-  actions.forEach(({ label, dict }) => {
-    const btn = document.createElement('button');
-    btn.className = 'btn card-btn card-action';
-    btn.textContent = label;
-    btn.onclick = () => pickCard(dict);
-    actGrid.appendChild(btn);
-  });
-}
 
 // =============================================================================
 // Card label helper
@@ -567,8 +523,8 @@ function cardLabel(card) {
 // Send functions
 // =============================================================================
 
-function sendDealCard(cardDict) {
-  sendMessage({ type: 'deal_card', card: cardDict });
+function sendDrawCard() {
+  sendMessage({ type: 'deal_card' });
 }
 
 function sendApplyAction(targetPlayerId) {
@@ -616,8 +572,6 @@ function resetToLobby() {
 // =============================================================================
 
 document.addEventListener('DOMContentLoaded', () => {
-  initCardPicker();
-
   // Allow Enter key on lobby inputs.
   ['player-name-input', 'room-code-input'].forEach(id => {
     document.getElementById(id).addEventListener('keydown', e => {

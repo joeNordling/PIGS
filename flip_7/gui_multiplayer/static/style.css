@@ -156,6 +156,23 @@ input[type="text"]:focus { border-color: var(--accent); }
 .badge-bust   { background: #3d1a1a; color: #f77a7a; }
 .badge-flip   { background: #3d2a10; color: #f7b96a; }
 .badge-sc     { background: #3a1a50; color: #d0a0f7; }
+.badge-turn   { background: #0d3d56; color: #56d0f7; font-weight: 700; }
+
+/* --- Turn banner ------------------------------------------------------------ */
+
+.turn-banner {
+  padding: .6rem 1.25rem;
+  font-size: .95rem;
+  font-weight: 600;
+  text-align: center;
+}
+.turn-banner.hidden    { display: none; }
+.turn-mine             { background: #0d3d56; color: #56d0f7; border-bottom: 2px solid #56d0f7; }
+.turn-other            { background: #1c2a3a; color: #7aabf7; border-bottom: 1px solid var(--border); }
+.turn-forced           { background: #3d2a10; color: #f7b96a; border-bottom: 2px solid #f7b96a; }
+
+.opponent-active-turn  { border-left: 3px solid #56d0f7; }
+.waiting-hint          { color: var(--text-muted); font-style: italic; margin: .5rem 0 0; }
 
 /* --- Game header ------------------------------------------------------------ */
 
