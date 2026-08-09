@@ -31,6 +31,9 @@ class RoomManager:
         player_connections: Maps player_id to their WebSocket.
         host_player: Maps game_id to the player_id of the room host (first joiner).
         pending_action: Maps game_id to a pending action card awaiting target selection.
+        match_history: Maps game_id to a list of completed-game summaries, oldest
+            first. Populated when a rematch starts (see start_new_game_same_room),
+            so it survives across the room's GameEngine being replaced.
     """
 
     def __init__(self):
@@ -40,6 +43,7 @@ class RoomManager:
         self.player_connections: Dict[str, WebSocket] = {}
         self.host_player: Dict[str, str] = {}
         self.pending_action: Dict[str, Optional[dict]] = {}
+        self.match_history: Dict[str, list[dict]] = {}
 
     # -------------------------------------------------------------------------
     # Room lifecycle
@@ -56,6 +60,7 @@ class RoomManager:
         self.room_players[game_id] = {}
         self.connections[game_id] = set()
         self.pending_action[game_id] = None
+        self.match_history[game_id] = []
         return game_id
 
     def join_room(self, game_id: str, player_name: str) -> str:
@@ -130,6 +135,70 @@ class RoomManager:
 
         self.rooms[game_id] = engine
         return engine
+
+    def start_new_game_same_room(self, game_id: str) -> GameEngine:
+        """
+        Start a brand-new game in an existing room, reusing the same player roster.
+
+        Used for "Play Again" after a game ends, so players stay connected and
+        in the same room instead of being forced to create/join a new one.
+
+        Args:
+            game_id: The room to restart.
+
+        Returns:
+            The newly initialised GameEngine.
+
+        Raises:
+            KeyError: If game_id does not exist.
+            ValueError: If no game has been played yet, the current game isn't
+                complete, or there are fewer than 2 players.
+        """
+        if game_id not in self.rooms:
+            raise KeyError(f"Room {game_id} does not exist")
+
+        current_engine = self.rooms[game_id]
+        if current_engine is None or not current_engine.game_state.is_complete:
+            raise ValueError("Current game is not yet complete")
+
+        self.match_history.setdefault(game_id, []).append(
+            self._summarize_completed_game(current_engine)
+        )
+
+        self.rooms[game_id] = None
+        self.pending_action[game_id] = None
+        return self.start_game(game_id)
+
+    @staticmethod
+    def _summarize_completed_game(engine: GameEngine) -> dict:
+        """
+        Build a compact summary of a just-finished game for match_history.
+
+        Captures the winner, each player's final total score, and the full
+        round-by-round history so past games can still be reviewed after a
+        rematch replaces the room's GameEngine.
+        """
+        game_state = engine.game_state
+        last_round = game_state.round_history[-1] if game_state.round_history else None
+
+        final_scores = {
+            player.player_id: (
+                last_round.player_states[player.player_id].total_score
+                if last_round and player.player_id in last_round.player_states
+                else 0
+            )
+            for player in game_state.players
+        }
+
+        return {
+            "winner_id": game_state.winner_id,
+            "winner_name": next(
+                (p.name for p in game_state.players if p.player_id == game_state.winner_id),
+                None,
+            ),
+            "final_scores": final_scores,
+            "rounds": [r.to_dict() for r in game_state.round_history],
+        }
 
     def get_engine(self, game_id: str) -> Optional[GameEngine]:
         """Return the GameEngine for a room, or None if the game hasn't started."""
@@ -288,9 +357,18 @@ class RoomManager:
         state["your_player_id"] = requesting_player_id
         state["is_host"] = self.is_host(game_id, requesting_player_id)
 
+        match_history = self.match_history.get(game_id, [])
+        state["match_history"] = match_history
+        state["game_number"] = len(match_history) + 1
+
         return state
 
-    async def broadcast_state(self, game_id: str, message_type: str = "state_update") -> None:
+    async def broadcast_state(
+        self,
+        game_id: str,
+        message_type: str = "state_update",
+        extra: Optional[dict] = None,
+    ) -> None:
         """
         Send each player their own filtered GameState view.
 
@@ -301,6 +379,8 @@ class RoomManager:
             game_id: The room to broadcast to.
             message_type: The 'type' field in the message (e.g. "state_update",
                           "game_started", "round_started").
+            extra: Additional fields to merge into every outgoing message
+                   (e.g. which player a just-applied action targeted).
         """
         for player_id in self.room_players.get(game_id, {}):
             try:
@@ -310,5 +390,5 @@ class RoomManager:
 
             await self.send_to_player(
                 player_id,
-                {"type": message_type, "state": state},
+                {"type": message_type, "state": state, **(extra or {})},
             )

@@ -8,6 +8,10 @@
 </head>
 <body>
 
+  <!-- Felt table background texture — fixed, sits behind every screen -->
+  <div class="felt-grain" id="grainLayer"></div>
+  <div class="felt-weave"></div>
+
   <!-- =====================================================================
        Screen 1: Lobby — join or create a room
        ===================================================================== -->
@@ -73,6 +77,30 @@
 
     <div class="game-body">
 
+      <!-- =====================================================================
+           Scoreboard card — sits above Opponents like any other board card.
+           Tabs switch between this game's live standings and the cross-game
+           win tally for the room. At round-end / game-over it grows in place
+           to surface the next action instead of handing off to a separate
+           screen or overlay.
+           ===================================================================== -->
+      <section>
+        <div id="scoreboard-card" class="scoreboard-card">
+          <div class="scoreboard-head">
+            <span class="scoreboard-title">🏆 Scoreboard <span id="scoreboard-leader" class="leader"></span></span>
+            <div class="picker-tabs">
+              <button id="scoreboard-tab-this-game" class="tab-btn active" onclick="showScoreboardTab('this-game')">This Game</button>
+              <button id="scoreboard-tab-overall" class="tab-btn hidden" onclick="showScoreboardTab('overall')">Overall</button>
+            </div>
+          </div>
+
+          <div id="scoreboard-panel-this-game" class="scoreboard-panel active"></div>
+          <div id="scoreboard-panel-overall" class="scoreboard-panel"></div>
+
+          <div id="scoreboard-actions" class="scoreboard-actions"></div>
+        </div>
+      </section>
+
       <!-- Opponents -->
       <section class="opponents-section">
         <h3 class="section-label">Opponents</h3>
@@ -113,33 +141,6 @@
       <p class="hint">Choose a duplicate number card to discard:</p>
       <div id="second-chance-list" class="target-list"></div>
       <button class="btn btn-ghost btn-full" onclick="closeModal('screen-second-chance')">Cancel</button>
-    </div>
-  </div>
-
-  <!-- =====================================================================
-       Screen 6: Round end summary
-       ===================================================================== -->
-  <div id="screen-round-end" class="screen">
-    <div class="card-panel lobby-panel">
-      <h2 id="round-end-title">Round Complete</h2>
-      <div id="round-end-flip7-banner" class="flip7-banner hidden"></div>
-      <div id="round-end-scores" class="score-list"></div>
-      <button id="next-round-btn" class="btn btn-primary btn-full hidden" onclick="sendStartRound()">
-        ▶ Start Next Round
-      </button>
-      <div class="hint" id="round-end-waiting" class="hidden">Waiting for the host to start the next round…</div>
-    </div>
-  </div>
-
-  <!-- =====================================================================
-       Screen 7: Game over
-       ===================================================================== -->
-  <div id="screen-game-over" class="screen">
-    <div class="card-panel lobby-panel">
-      <h2>🎉 Game Over!</h2>
-      <div id="game-over-winner" class="winner-display"></div>
-      <div id="game-over-scores" class="score-list"></div>
-      <button class="btn btn-primary btn-full" onclick="resetToLobby()">Play Again</button>
     </div>
   </div>
 

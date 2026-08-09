@@ -288,14 +288,14 @@ class GameEngine:
             self.end_round()
             return card_from_deck
 
-        # Handle Flip Three counter - only decrement for non-action cards
+        # Handle Flip Three counter - every card dealt counts as one of the 3
+        # forced draws, including action cards (Freeze, Flip Three, Second Chance).
         # Only check counter if flip_three was ALREADY active before this card
+        # (the FLIP_THREE card that started the effect doesn't count toward itself).
         if flip_three_was_active and player_state.flip_three_count > 0:
-            # Only decrement if the card dealt was NOT an action card
-            if not isinstance(card_from_deck, ActionCard):
-                player_state.flip_three_count -= 1
-                if player_state.flip_three_count == 0:
-                    player_state.flip_three_active = False
+            player_state.flip_three_count -= 1
+            if player_state.flip_three_count == 0:
+                player_state.flip_three_active = False
 
         # Advance the turn for non-action cards.
         # Action cards advance the turn only after apply_action_card_effect() is called,
@@ -615,6 +615,12 @@ class GameEngine:
             target_state.round_score = score_breakdown.final_score
             target_state.total_score += target_state.round_score
 
+            # If given to someone else, move the card from the drawer's hand
+            # to the target's, so it visually shows up with whoever it was
+            # actually applied to.
+            if original_player_id and original_player_id != target_player_id:
+                self._move_action_card_to_target(original_player_id, target_player_id, card)
+
             # Create description based on whether it was applied to self or opponent
             if original_name and original_name != target_name:
                 description = f"{original_name} froze {target_name} who banked {target_state.round_score} points"
@@ -638,13 +644,35 @@ class GameEngine:
             target_state.flip_three_active = True
             target_state.flip_three_count = 3
 
-            # If the target is not the current player, push to the effect stack so
-            # _advance_turn() will interrupt normal rotation and give them the turn next.
+            # If given to someone else, move the card from the drawer's hand
+            # to the target's, so it visually shows up with whoever it was
+            # actually applied to.
+            if original_player_id and original_player_id != target_player_id:
+                self._move_action_card_to_target(original_player_id, target_player_id, card)
+
+            # If the target is not the current player, they need to take their turn next.
             current_player_id = self.game_state.current_round.current_player_id
             if target_player_id != current_player_id:
-                self.game_state.current_round.effect_stack.insert(
-                    0, PendingEffect(effect_type="flip_three", target_id=target_player_id)
-                )
+                current_player_state = self.game_state.current_round.player_states.get(current_player_id)
+                if (
+                    current_player_state is not None
+                    and not current_player_state.is_busted
+                    and current_player_state.flip_three_active
+                    and current_player_state.flip_three_count > 0
+                ):
+                    # The drawer is mid-way through their own forced draws (this Flip Three
+                    # was drawn as one of those 3). Resolve the target's Flip Three
+                    # immediately, then come back and finish the drawer's remaining draws.
+                    self.game_state.current_round.effect_stack.insert(
+                        0, PendingEffect(effect_type="flip_three", target_id=current_player_id)
+                    )
+                    self.game_state.current_round.current_player_id = target_player_id
+                else:
+                    # Normal case: push to the effect stack so _advance_turn() will
+                    # interrupt normal rotation and give the target the turn next.
+                    self.game_state.current_round.effect_stack.insert(
+                        0, PendingEffect(effect_type="flip_three", target_id=target_player_id)
+                    )
 
             # Create description based on whether it was applied to self or opponent
             if original_name and original_name != target_name:
@@ -668,17 +696,7 @@ class GameEngine:
 
                 # If card was given to someone else, move it from original player's hand to target's hand
                 if original_player_id and original_player_id != target_player_id:
-                    original_state = self.game_state.current_round.player_states[original_player_id]
-                    # Find the Second Chance card in original player's hand
-                    sc_card_in_hand = next(
-                        (c for c in original_state.cards_in_hand
-                         if isinstance(c, ActionCard) and c.action_type == ActionType.SECOND_CHANCE),
-                        None
-                    )
-                    if sc_card_in_hand:
-                        # Remove from original player's hand and add to target's hand
-                        original_state.cards_in_hand.remove(sc_card_in_hand)
-                        target_state.cards_in_hand.append(sc_card_in_hand)
+                    self._move_action_card_to_target(original_player_id, target_player_id, card)
 
                 # Create description based on whether it was applied to self or opponent
                 if original_name and original_name != target_name:
@@ -700,6 +718,24 @@ class GameEngine:
         # Second Chance (drawing player's turn is done).
         if self.game_state.current_round is not None:
             self._advance_turn()
+
+    def _move_action_card_to_target(
+        self, original_player_id: str, target_player_id: str, card: ActionCard
+    ) -> None:
+        """
+        Move an action card from the drawer's hand to the hand of whoever the
+        effect was actually applied to, so it visually shows up with them.
+        """
+        original_state = self.game_state.current_round.player_states[original_player_id]
+        target_state = self.game_state.current_round.player_states[target_player_id]
+        card_in_hand = next(
+            (c for c in original_state.cards_in_hand
+             if isinstance(c, ActionCard) and c.action_type == card.action_type),
+            None
+        )
+        if card_in_hand:
+            original_state.cards_in_hand.remove(card_in_hand)
+            target_state.cards_in_hand.append(card_in_hand)
 
     def _advance_turn(self) -> None:
         """

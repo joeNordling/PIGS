@@ -237,7 +237,7 @@ class TestCardDealing:
         assert player_state.flip_three_count == 0, "Count should be 0 after completing effect"
 
     def test_flip_three_with_action_card_during_effect(self):
-        """Test that action cards drawn during FLIP_THREE don't count toward the 3."""
+        """Test that Second Chance drawn during FLIP_THREE counts toward the 3."""
         engine = GameEngine()
         game_state = engine.start_new_game(["Alice", "Bob"])
         engine.start_new_round()
@@ -251,24 +251,21 @@ class TestCardDealing:
         engine.apply_action_card_effect(flip_three_card, player_id, player_id)
         assert player_state.flip_three_count == 3
 
-        # Deal an action card (SECOND_CHANCE) - should NOT count toward the 3
+        # Deal an action card (SECOND_CHANCE) - SHOULD count toward the 3
         sc_card = ActionCard(action_type=ActionType.SECOND_CHANCE)
         engine.deal_card_to_player(player_id, sc_card)
         engine.apply_action_card_effect(sc_card, player_id, player_id)
-        assert player_state.flip_three_count == 3, "Action cards shouldn't count"
+        assert player_state.flip_three_count == 2, "Second Chance should count as one of the 3 draws"
         assert len(player_state.cards_in_hand) == 2
 
-        # Now deal 3 number cards
+        # Now deal 2 more number cards to complete the 3
         engine.deal_card_to_player(player_id, NumberCard(value=5))
-        assert player_state.flip_three_count == 2
-
-        engine.deal_card_to_player(player_id, NumberCard(value=7))
         assert player_state.flip_three_count == 1
 
-        engine.deal_card_to_player(player_id, NumberCard(value=3))
+        engine.deal_card_to_player(player_id, NumberCard(value=7))
         assert player_state.flip_three_count == 0
         assert player_state.flip_three_active is False
-        assert len(player_state.cards_in_hand) == 5, "Should have FLIP_THREE + SECOND_CHANCE + 3 numbers"
+        assert len(player_state.cards_in_hand) == 4, "Should have FLIP_THREE + SECOND_CHANCE + 2 numbers"
 
     def test_flip_three_with_modifier_cards(self):
         """Test that modifier cards count toward the 3 cards in FLIP_THREE."""
@@ -565,10 +562,10 @@ class TestActionCardTargeting:
 
         # Deal Flip Three to Alice
         flip_three_card = ActionCard(action_type=ActionType.FLIP_THREE)
-        engine.deal_card_to_player(alice_id, flip_three_card)
+        dealt_card = engine.deal_card_to_player(alice_id, flip_three_card)
 
         # Alice applies it to Bob
-        engine.apply_action_card_effect(flip_three_card, bob_id, alice_id)
+        engine.apply_action_card_effect(dealt_card, bob_id, alice_id)
 
         # Check that Bob has Flip Three active, not Alice
         game_state = engine.game_state
@@ -578,6 +575,10 @@ class TestActionCardTargeting:
         assert not alice_state.flip_three_active
         assert bob_state.flip_three_active
         assert bob_state.flip_three_count == 3
+
+        # The card itself should show up in Bob's hand, not Alice's.
+        assert dealt_card not in alice_state.cards_in_hand
+        assert dealt_card in bob_state.cards_in_hand
 
     def test_flip_three_can_target_self(self):
         """Test that Flip Three can be applied to self."""
@@ -601,6 +602,63 @@ class TestActionCardTargeting:
         assert alice_state.flip_three_active
         assert alice_state.flip_three_count == 3
 
+    def test_flip_three_nested_interrupts_and_returns(self):
+        """Test that drawing a Flip Three while resolving one's own Flip Three
+        immediately hands the turn to the new target, and returns to the
+        original player (with their remaining draws intact) once resolved."""
+        engine = GameEngine()
+        engine.start_new_game(["Alice", "Bob", "Charlie"])
+        engine.start_new_round()
+
+        game_state = engine.game_state
+        alice_id = game_state.players[0].player_id
+        bob_id = game_state.players[1].player_id
+        charlie_id = game_state.players[2].player_id
+
+        # Bob applies Flip Three to Alice - she now owes 3 forced draws.
+        flip_three_card = ActionCard(action_type=ActionType.FLIP_THREE)
+        engine.deal_card_to_player(bob_id, flip_three_card)
+        engine.apply_action_card_effect(flip_three_card, alice_id, bob_id)
+
+        alice_state = game_state.current_round.player_states[alice_id]
+        assert alice_state.flip_three_active
+        assert alice_state.flip_three_count == 3
+        assert game_state.current_round.current_player_id == alice_id
+
+        # Alice's first forced draw is itself a Flip Three, targeted at Charlie.
+        nested_flip_three = ActionCard(action_type=ActionType.FLIP_THREE)
+        engine.deal_card_to_player(alice_id, nested_flip_three)
+        engine.apply_action_card_effect(nested_flip_three, charlie_id, alice_id)
+
+        charlie_state = game_state.current_round.player_states[charlie_id]
+
+        # The nested Flip Three counts as one of Alice's 3 forced draws,
+        # but the turn must move to Charlie immediately - not stay on Alice.
+        assert alice_state.flip_three_count == 2
+        assert charlie_state.flip_three_active
+        assert charlie_state.flip_three_count == 3
+        assert game_state.current_round.current_player_id == charlie_id
+
+        # Charlie resolves his 3 forced draws.
+        engine.deal_card_to_player(charlie_id, NumberCard(value=4))
+        assert game_state.current_round.current_player_id == charlie_id
+        engine.deal_card_to_player(charlie_id, NumberCard(value=6))
+        assert game_state.current_round.current_player_id == charlie_id
+        engine.deal_card_to_player(charlie_id, NumberCard(value=8))
+
+        # Charlie is done - turn should return to Alice to finish her remaining draws.
+        assert not charlie_state.flip_three_active
+        assert game_state.current_round.current_player_id == alice_id
+        assert alice_state.flip_three_count == 2
+        assert alice_state.flip_three_active
+
+        # Alice finishes her remaining 2 forced draws.
+        engine.deal_card_to_player(alice_id, NumberCard(value=1))
+        assert alice_state.flip_three_count == 1
+        engine.deal_card_to_player(alice_id, NumberCard(value=2))
+        assert alice_state.flip_three_count == 0
+        assert not alice_state.flip_three_active
+
     def test_freeze_can_target_opponent(self):
         """Test that Freeze can be applied to an opponent."""
         engine = GameEngine()
@@ -616,10 +674,10 @@ class TestActionCardTargeting:
 
         # Deal Freeze to Alice
         freeze_card = ActionCard(action_type=ActionType.FREEZE)
-        engine.deal_card_to_player(alice_id, freeze_card)
+        dealt_card = engine.deal_card_to_player(alice_id, freeze_card)
 
         # Alice freezes Bob
-        engine.apply_action_card_effect(freeze_card, bob_id, alice_id)
+        engine.apply_action_card_effect(dealt_card, bob_id, alice_id)
 
         # Check that Bob is frozen (stayed) and score is banked
         game_state = engine.game_state
@@ -628,6 +686,13 @@ class TestActionCardTargeting:
         assert bob_state.has_stayed
         assert bob_state.round_score == 12  # 7 + 5
         assert bob_state.total_score == 12
+
+        # The card itself should show up in Bob's hand, not Alice's, and
+        # shouldn't have thrown off the score calculation (still 12, not
+        # affected by the Freeze card landing in the hand).
+        alice_state = game_state.current_round.player_states[alice_id]
+        assert dealt_card not in alice_state.cards_in_hand
+        assert dealt_card in bob_state.cards_in_hand
 
     def test_freeze_can_target_self(self):
         """Test that Freeze can be applied to self."""

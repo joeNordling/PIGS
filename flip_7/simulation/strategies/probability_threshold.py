@@ -21,12 +21,16 @@ class ProbabilityThresholdStrategy(BaseStrategy):
 
     Attributes:
         bust_probability_threshold: Maximum acceptable bust probability (0.0-1.0)
+        min_score_threshold: Minimum round score before bust risk alone is
+            enough to stay/freeze self — below this, keep hitting regardless
+            of risk since there's not much worth banking yet.
     """
 
     def __init__(
         self,
         name: Optional[str] = None,
-        bust_probability_threshold: float = 0.20
+        bust_probability_threshold: float = 0.20,
+        min_score_threshold: int = 20
     ):
         """
         Initialize probability threshold strategy.
@@ -34,6 +38,7 @@ class ProbabilityThresholdStrategy(BaseStrategy):
         Args:
             name: Optional custom name
             bust_probability_threshold: Max bust probability to accept (default: 0.20 = 20%)
+            min_score_threshold: Minimum round score to consider banking at (default: 20)
 
         Raises:
             ValueError: If bust_probability_threshold not in [0.0, 1.0]
@@ -51,6 +56,7 @@ class ProbabilityThresholdStrategy(BaseStrategy):
 
         super().__init__(name)
         self.bust_probability_threshold = bust_probability_threshold
+        self.min_score_threshold = min_score_threshold
 
     def decide_hit_or_stay(self, context: StrategyContext) -> bool:
         """
@@ -80,8 +86,13 @@ class ProbabilityThresholdStrategy(BaseStrategy):
         # Calculate bust probability
         bust_probability = self._calculate_bust_probability(context)
 
-        # Hit if probability is below threshold, otherwise stay
-        return bust_probability < self.bust_probability_threshold
+        # Only stay if the risk is high AND there's a worthwhile score to bank —
+        # otherwise keep hitting even under high risk, since there's nothing to protect yet.
+        should_stay = (
+            bust_probability >= self.bust_probability_threshold
+            and context.my_round_score >= self.min_score_threshold
+        )
+        return not should_stay
 
     def _calculate_bust_probability(self, context: StrategyContext) -> float:
         """
@@ -190,8 +201,8 @@ class ProbabilityThresholdStrategy(BaseStrategy):
         # Calculate current bust probability
         bust_prob = self._calculate_bust_probability(context)
 
-        # If we have high bust risk, freeze ourselves
-        if bust_prob >= self.bust_probability_threshold:
+        # If we have high bust risk and a worthwhile score to protect, freeze ourselves
+        if bust_prob >= self.bust_probability_threshold and context.my_round_score >= self.min_score_threshold:
             return context.my_player_id
 
         # Otherwise, freeze opponent with highest total score

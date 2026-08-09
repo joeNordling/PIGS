@@ -15,7 +15,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, stat
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from flip_7.data.models import ActionCard, NumberCard
+from flip_7.data.models import ActionCard, ActionType, NumberCard
 from flip_7.data.persistence import deserialize_card
 from flip_7.network.room_manager import RoomManager
 
@@ -87,6 +87,29 @@ async def start_game(game_id: str, body: StartRequest):
 
     try:
         room_manager.start_game(game_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+
+    await room_manager.broadcast_state(game_id, message_type="game_started")
+    return {"ok": True}
+
+
+@app.post("/api/rooms/{game_id}/rematch")
+async def rematch(game_id: str, body: StartRequest):
+    """
+    Start a brand-new game in the same room after the previous one finished.
+
+    Only the host may call this. Keeps everyone connected to the same room
+    instead of forcing a new room to be created.
+    """
+    if not room_manager.room_exists(game_id):
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    if not room_manager.is_host(game_id, body.player_id):
+        raise HTTPException(status_code=403, detail="Only the host can start a rematch")
+
+    try:
+        room_manager.start_new_game_same_room(game_id)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
 
@@ -206,6 +229,15 @@ async def _handle_deal_card(
     ):
         raise ValueError("It is not your turn")
 
+    # An action card's effect (e.g. Second Chance's has_second_chance flag,
+    # Flip Three's forced-draw obligation) isn't applied until the owner
+    # picks a target via apply_action. current_player_id doesn't advance
+    # until then either, so without this guard the same player could draw
+    # again before that resolves — busting on a duplicate with a Second
+    # Chance still sitting unapplied in their hand.
+    if room_manager.pending_action.get(game_id):
+        raise ValueError("Resolve the pending action card before drawing again")
+
     drawn_card = engine.deal_card_to_player(player_id)
 
     if isinstance(drawn_card, ActionCard):
@@ -213,11 +245,27 @@ async def _handle_deal_card(
         current_round = engine.game_state.current_round
         eligible = []
         if current_round is not None:
+            is_second_chance = drawn_card.action_type == ActionType.SECOND_CHANCE
+            # A Second Chance can't go to anyone who already holds one — not
+            # the drawer (apply_action_card_effect rejects self-targeting a
+            # second one) and not an opponent either (the engine would just
+            # silently no-op: it never sets a second flag or moves the card,
+            # leaving it stuck in the drawer's hand with no error raised).
             eligible = [
                 {"player_id": pid, "player_name": ps.name}
                 for pid, ps in current_round.player_states.items()
                 if not ps.has_stayed and not ps.is_busted
+                and not (is_second_chance and ps.has_second_chance)
             ]
+
+            if not eligible:
+                # No one can legitimately receive this card (everyone active
+                # already holds one, or every other player has stayed/busted)
+                # — discard it and let the drawer continue their turn instead
+                # of leaving them stuck with no valid target to pick.
+                engine.discard_action_card(drawn_card, player_id)
+                await room_manager.broadcast_state(game_id, _infer_message_type(engine))
+                return
 
         room_manager.pending_action[game_id] = {
             "card": drawn_card,
@@ -245,10 +293,15 @@ async def _handle_apply_action(
         raise ValueError("You do not own the pending action card")
 
     target_player_id = data["target_player_id"]
+    action_type = pending["card"].action_type.value
     engine.apply_action_card_effect(pending["card"], target_player_id, player_id)
     room_manager.pending_action[game_id] = None
 
-    await room_manager.broadcast_state(game_id, _infer_message_type(engine))
+    await room_manager.broadcast_state(
+        game_id,
+        _infer_message_type(engine),
+        extra={"action_applied": {"type": action_type, "target_player_id": target_player_id}},
+    )
 
 
 async def _handle_stay(
@@ -262,6 +315,11 @@ async def _handle_stay(
         and current_round.current_player_id != player_id
     ):
         raise ValueError("It is not your turn")
+
+    # Same reasoning as _handle_deal_card: staying before the pending action
+    # card's target is chosen would leave it stuck unresolved.
+    if room_manager.pending_action.get(game_id):
+        raise ValueError("Resolve the pending action card before staying")
 
     engine.player_stay(player_id)
     await room_manager.broadcast_state(game_id, _infer_message_type(engine))

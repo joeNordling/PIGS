@@ -669,6 +669,7 @@ class TestProbabilityThresholdStrategy:
         decision = strategy.decide_hit_or_stay(context)
         # Bust probability should be > 20% with 4 values in hand and only 20 cards left
         # Should stay because probability is high and score is sufficient
+        assert decision is False
 
     def test_hits_despite_high_probability_if_score_too_low(self):
         """Test strategy hits even with high bust probability if score is too low."""

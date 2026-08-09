@@ -14,6 +14,12 @@ let myGameId   = null;
 let ws         = null;
 let lastState  = null;
 
+// Freeze animation tracking: `pendingFreezeIds` marks players who should play the
+// freeze-in animation on the very next render; `animatedFrozenIds` remembers who
+// already played it this round so later re-renders just show the settled frost tint.
+let pendingFreezeIds  = new Set();
+let animatedFrozenIds = new Set();
+
 // Card sort modes: 'original' | 'value' | 'type'
 const SORT_MODES  = ['original', 'value', 'type'];
 const SORT_LABELS = { original: '↕ Original', value: '🔢 By Value', type: '🃏 By Type' };
@@ -114,11 +120,38 @@ async function joinGame(playerName, gameId) {
 }
 
 function copyRoomCode() {
-  navigator.clipboard.writeText(myGameId).then(() => {
-    const btn = document.querySelector('.room-code-box .btn-small');
+  const btn = document.querySelector('.room-code-box .btn-small');
+  const showCopied = () => {
+    if (!btn) return;
     btn.textContent = 'Copied!';
     setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
-  });
+  };
+
+  // navigator.clipboard only exists in secure contexts (HTTPS or localhost) -
+  // LAN play (e.g. launch_multiplayer.sh --host 0.0.0.0) is plain HTTP, so it's
+  // undefined there. Fall back to the classic textarea + execCommand approach.
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(myGameId).then(showCopied).catch(() => legacyCopyRoomCode(showCopied));
+  } else {
+    legacyCopyRoomCode(showCopied);
+  }
+}
+
+function legacyCopyRoomCode(onSuccess) {
+  const textarea = document.createElement('textarea');
+  textarea.value = myGameId;
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  try {
+    document.execCommand('copy');
+    onSuccess();
+  } catch (err) {
+    showError('lobby-error', 'Could not copy room code — please copy it manually.');
+  }
+  document.body.removeChild(textarea);
 }
 
 async function startGame() {
@@ -184,28 +217,45 @@ function handleMessage(msg) {
       break;
 
     case 'game_started':
+      animatedFrozenIds.clear();
+      pendingFreezeIds.clear();
       showScreen('screen-game');
       closeModal('screen-action-target');
       closeModal('screen-second-chance');
       renderGameState(msg.state);
+      renderScoreboard(msg.state);
       break;
 
     case 'state_update':
+      if (msg.action_applied && msg.action_applied.type === 'freeze') {
+        pendingFreezeIds.add(msg.action_applied.target_player_id);
+      }
       renderGameState(msg.state);
+      renderScoreboard(msg.state);
       break;
 
     case 'round_started':
+      animatedFrozenIds.clear();
+      pendingFreezeIds.clear();
       showScreen('screen-game');
       renderGameState(msg.state);
+      renderScoreboard(msg.state);
       break;
 
     case 'round_ended':
+      if (msg.action_applied && msg.action_applied.type === 'freeze') {
+        pendingFreezeIds.add(msg.action_applied.target_player_id);
+      }
       renderRoundEndingBoard(msg.state);
-      setTimeout(() => renderRoundEnd(msg.state), 3000);
+      renderScoreboard(msg.state, { phase: 'round-end' });
       break;
 
     case 'game_over':
-      renderGameOver(msg.state);
+      if (msg.action_applied && msg.action_applied.type === 'freeze') {
+        pendingFreezeIds.add(msg.action_applied.target_player_id);
+      }
+      renderRoundEndingBoard(msg.state);
+      renderScoreboard(msg.state, { phase: 'game-over' });
       break;
 
     case 'action_pending':
@@ -305,17 +355,69 @@ function renderGameState(state) {
   }
 }
 
-function statusBadge(ps, isCurrentPlayer = false) {
+/** A Flip 7 is 7 distinct number-card values in hand — derivable straight from the hand. */
+function hasFlip7(ps) {
+  const values = new Set(
+    ps.cards_in_hand.filter(c => c.card_type === 'number').map(c => c.value)
+  );
+  return values.size >= 7;
+}
+
+function statusBadge(ps, isCurrentPlayer = false, isFrozen = false) {
   if (ps.is_busted)         return '<span class="badge badge-bust">BUSTED</span>';
+  if (hasFlip7(ps))         return '<span class="badge badge-flip7">🎉 FLIP 7!</span>';
+  if (isFrozen)             return '<span class="badge badge-frozen">FROZEN</span>';
   if (ps.has_stayed)        return '<span class="badge badge-stay">STAYED</span>';
   if (ps.flip_three_active) return `<span class="badge badge-flip">FLIP THREE (${ps.flip_three_count} left)</span>`;
   if (isCurrentPlayer)      return '<span class="badge badge-turn">YOUR TURN</span>';
   return '<span class="badge badge-active">ACTIVE</span>';
 }
 
+/** Confetti overlay markup — mirrors frostMarkup() but for the Flip 7 celebration. */
+function flip7Markup() {
+  const pieces = [
+    { emoji: '🎉', top: '8%',  left: '12%', tx: '-30px', ty: '-35px', tr: '-25deg' },
+    { emoji: '✨', top: '12%', left: '82%', tx: '32px',  ty: '-30px', tr: '20deg'  },
+    { emoji: '🎊', top: '72%', left: '18%', tx: '-25px', ty: '30px',  tr: '15deg'  },
+    { emoji: '⭐', top: '68%', left: '86%', tx: '28px',  ty: '25px',  tr: '-20deg' },
+  ];
+  const confettiHtml = pieces.map(p => `
+    <span class="flip7-confetti" style="top:${p.top}; left:${p.left}; --tx:${p.tx}; --ty:${p.ty}; --tr:${p.tr};">${p.emoji}</span>
+  `).join('');
+  return `<div class="flip7-overlay"></div>${confettiHtml}`;
+}
+
+/** Frost overlay markup — a few absolutely-positioned decoration divs the freeze CSS animates. */
+function frostMarkup() {
+  return `
+    <div class="frost-overlay"></div>
+    <div class="frost-crack" style="top:35%; left:15%; width:60%; height:2px; transform:rotate(-8deg);"></div>
+    <div class="frost-crack" style="top:60%; left:25%; width:45%; height:2px; transform:rotate(12deg);"></div>
+    <div class="frost-snowflake">❄️</div>
+  `;
+}
+
+/**
+ * Determine this player's freeze animation state for the current render:
+ * 'freezing' the first time we render them after a freeze is applied,
+ * 'frozen-settled' on every render after that (until the round resets),
+ * or '' if they were never frozen (a voluntary stay doesn't get frost).
+ */
+function frostClassFor(playerId, ps) {
+  if (!ps.has_stayed) return '';
+  if (pendingFreezeIds.has(playerId)) {
+    pendingFreezeIds.delete(playerId);
+    animatedFrozenIds.add(playerId);
+    return 'freezing';
+  }
+  return animatedFrozenIds.has(playerId) ? 'frozen-settled' : '';
+}
+
 function renderOpponent(playerInfo, ps, isCurrentPlayer = false) {
   const div = document.createElement('div');
-  div.className = 'opponent-row' + (isCurrentPlayer ? ' opponent-active-turn' : '');
+  const frostClass = frostClassFor(playerInfo.player_id, ps);
+  const flip7Class = hasFlip7(ps) ? 'flip7-celebrate' : '';
+  div.className = 'opponent-row' + (isCurrentPlayer ? ' opponent-active-turn' : '') + (frostClass ? ' ' + frostClass : '') + (flip7Class ? ' ' + flip7Class : '');
 
   const cardCount = ps.card_count ?? ps.cards_in_hand.length;
   const cardsHtml = ps.cards_in_hand.length
@@ -323,7 +425,9 @@ function renderOpponent(playerInfo, ps, isCurrentPlayer = false) {
     : '<div class="opponent-hand"><span class="hint">No cards yet</span></div>';
 
   div.innerHTML = `
-    <div class="opponent-name">${escHtml(playerInfo.name)} ${statusBadge(ps, isCurrentPlayer)}</div>
+    ${frostClass ? frostMarkup() : ''}
+    ${flip7Class ? flip7Markup() : ''}
+    <div class="opponent-name">${escHtml(playerInfo.name)} ${statusBadge(ps, isCurrentPlayer, !!frostClass)}</div>
     <div class="opponent-stats">
       <span>${cardCount} card${cardCount !== 1 ? 's' : ''}</span>
       <span>Round: <strong>${ps.round_score}</strong></span>
@@ -353,12 +457,19 @@ function sortedCards(cards) {
   });
 }
 
-function renderMyPanel(playerInfo, ps, state) {
+/**
+ * Render the local player's panel.
+ * Pass `interactive: false` for read-only contexts (round-ended / game-over
+ * screens) to skip the turn banner logic and action buttons.
+ */
+function renderMyPanel(playerInfo, ps, state, { interactive = true } = {}) {
   const div = document.createElement('div');
-  div.className = 'my-panel-inner';
+  const frostClass = frostClassFor(playerInfo.player_id, ps);
+  const flip7Class = hasFlip7(ps) ? 'flip7-celebrate' : '';
+  div.className = 'my-panel-inner' + (frostClass ? ' ' + frostClass : '') + (flip7Class ? ' ' + flip7Class : '');
 
   const round = state.current_round;
-  const isMyTurn = round && round.current_player_id === state.your_player_id;
+  const isMyTurn = interactive && round && round.current_player_id === state.your_player_id;
 
   // Hand display (respect current sort mode)
   const displayCards = sortedCards(ps.cards_in_hand);
@@ -368,7 +479,7 @@ function renderMyPanel(playerInfo, ps, state) {
 
   // Score breakdown text
   let scoreText = `Round score: <strong>${ps.round_score}</strong> &nbsp;|&nbsp; Total: <strong>${ps.total_score}</strong>`;
-  if (ps.flip_three_active) {
+  if (interactive && ps.flip_three_active) {
     scoreText += ` &nbsp;|&nbsp; <span class="badge badge-flip">Must draw ${ps.flip_three_count} more</span>`;
   }
 
@@ -382,7 +493,9 @@ function renderMyPanel(playerInfo, ps, state) {
   const sortLabel = SORT_LABELS[cardSortMode];
 
   div.innerHTML = `
-    <div class="my-name">${escHtml(playerInfo.name)} ${statusBadge(ps, isMyTurn)}</div>
+    ${frostClass ? frostMarkup() : ''}
+    ${flip7Class ? flip7Markup() : ''}
+    <div class="my-name">${escHtml(playerInfo.name)} ${statusBadge(ps, isMyTurn, !!frostClass)}</div>
     <div class="hand-header">
       <span class="hand-label">Cards in hand</span>
       <button class="btn btn-sort btn-small" onclick="cycleCardSort()">${sortLabel}</button>
@@ -395,7 +508,7 @@ function renderMyPanel(playerInfo, ps, state) {
         <button class="btn btn-stay" onclick="sendStay()" ${canStay ? '' : 'disabled'}>✋ Stay</button>
         ${ps.has_second_chance ? '<button class="btn btn-sc" onclick="openSecondChance()">🎯 Use Second Chance</button>' : ''}
       </div>
-    ` : (!ps.has_stayed && !ps.is_busted ? '<p class="hint waiting-hint">⏳ Waiting for your turn…</p>' : '')}
+    ` : (interactive && !ps.has_stayed && !ps.is_busted ? '<p class="hint waiting-hint">⏳ Waiting for your turn…</p>' : '')}
   `;
   return div;
 }
@@ -427,7 +540,7 @@ function renderRoundEndingBoard(state) {
   const turnBanner = document.getElementById('turn-banner');
   const reasonLabel = END_REASON_LABELS[round.end_reason] ?? 'Round over';
   turnBanner.textContent = `Round ended — ${reasonLabel}`;
-  turnBanner.className = 'turn-banner turn-other';
+  turnBanner.className = round.end_reason === 'flip_7' ? 'turn-banner turn-flip7' : 'turn-banner turn-other';
   turnBanner.classList.remove('hidden');
 
   // Render all players from the completed round (no action buttons)
@@ -445,108 +558,134 @@ function renderRoundEndingBoard(state) {
   const myPanel = document.getElementById('my-panel');
   myPanel.innerHTML = '';
   if (myInfo && myPs) {
-    // Render my panel without action buttons (round is over)
-    const div = document.createElement('div');
-    div.className = 'my-panel-inner';
-    const displayCards = sortedCards(myPs.cards_in_hand);
-    const handHtml = displayCards.length
-      ? displayCards.map(c => cardHtml(c)).join('')
-      : '<span class="hint">No cards</span>';
-    const sortLabel = SORT_LABELS[cardSortMode];
-    div.innerHTML = `
-      <div class="my-name">${escHtml(myInfo.name)} ${statusBadge(myPs, false)}</div>
-      <div class="hand-header">
-        <span class="hand-label">Cards in hand</span>
-        <button class="btn btn-sort btn-small" onclick="cycleCardSort()">${sortLabel}</button>
-      </div>
-      <div class="my-hand">${handHtml}</div>
-      <div class="my-score">Round score: <strong>${myPs.round_score}</strong> &nbsp;|&nbsp; Total: <strong>${myPs.total_score}</strong></div>
-    `;
-    myPanel.appendChild(div);
+    myPanel.appendChild(renderMyPanel(myInfo, myPs, state, { interactive: false }));
   }
 }
 
 // =============================================================================
-// Round end + game over
+// Scoreboard card
 // =============================================================================
 
-function renderRoundEnd(state) {
-  lastState = state;
-  const history = state.round_history;
-  if (!history || history.length === 0) return;
+let scoreboardTab = 'this-game'; // 'this-game' | 'overall'
 
-  const lastRound = history[history.length - 1];
-  const roundNum  = lastRound.round_number;
+function showScoreboardTab(which) {
+  scoreboardTab = which;
+  document.getElementById('scoreboard-tab-this-game').classList.toggle('active', which === 'this-game');
+  document.getElementById('scoreboard-tab-overall').classList.toggle('active', which === 'overall');
+  document.getElementById('scoreboard-panel-this-game').classList.toggle('active', which === 'this-game');
+  document.getElementById('scoreboard-panel-overall').classList.toggle('active', which === 'overall');
+  if (lastState) renderScoreboard(lastState);
+}
 
-  const isFlip7 = lastRound.end_reason === 'flip_7';
-  const titleEl = document.getElementById('round-end-title');
-  const bannerEl = document.getElementById('round-end-flip7-banner');
-
-  if (isFlip7) {
-    const winner = state.players.find(p => lastRound.winner_ids.includes(p.player_id));
-    const winnerName = winner ? escHtml(winner.name) : 'A player';
-    titleEl.innerHTML = '🎉 FLIP 7!';
-    if (bannerEl) {
-      bannerEl.innerHTML = `<strong>${winnerName}</strong> collected all 7 unique number cards and earned a 15-point bonus!`;
-      bannerEl.classList.remove('hidden');
-    }
-  } else {
-    titleEl.textContent = `Round ${roundNum} Complete`;
-    if (bannerEl) bannerEl.classList.add('hidden');
-  }
-
-  const scoresEl = document.getElementById('round-end-scores');
-  scoresEl.innerHTML = '';
-
-  const sorted = state.players
-    .map(p => ({ ...p, ps: lastRound.player_states[p.player_id] }))
-    .filter(p => p.ps)
-    .sort((a, b) => b.ps.round_score - a.ps.round_score);
-
-  sorted.forEach(p => {
-    const isWinner = lastRound.winner_ids.includes(p.player_id);
-    const row = document.createElement('div');
-    row.className = 'score-row';
-    row.innerHTML = `
-      <span>${isWinner ? '👑 ' : ''}${escHtml(p.name)}</span>
-      <span>+${p.ps.round_score} pts &nbsp; → &nbsp; <strong>${p.ps.total_score} total</strong></span>
-    `;
-    scoresEl.appendChild(row);
+/** Games won per player_id, from match_history. */
+function calculateWinCounts(state) {
+  const winCounts = {};
+  state.players.forEach(p => { winCounts[p.player_id] = 0; });
+  (state.match_history || []).forEach(g => {
+    if (g.winner_id && winCounts[g.winner_id] !== undefined) winCounts[g.winner_id] += 1;
   });
-
-  const nextBtn     = document.getElementById('next-round-btn');
-  const waitingNote = document.getElementById('round-end-waiting');
-  nextBtn.classList.toggle('hidden', !state.is_host);
-  if (waitingNote) waitingNote.classList.toggle('hidden', state.is_host);
-
-  showScreen('screen-round-end');
+  return winCounts;
 }
 
-function renderGameOver(state) {
-  lastState = state;
+/**
+ * Renders the scoreboard card: leader callout, "This Game" / "Overall"
+ * score lists, and (at round-end / game-over) the actions row that used to
+ * live on separate screens. The card grows in place for those moments
+ * rather than handing off to an overlay — no reason/deltas are shown since
+ * the board above already makes the outcome visible.
+ *
+ * opts.phase: 'round-end' | 'game-over' | undefined
+ */
+function renderScoreboard(state, opts = {}) {
+  const roundHistory = state.round_history || [];
+  const currentRound = state.current_round;
+  const matchHistory = state.match_history || [];
 
-  const history  = state.round_history;
-  const lastRound = history[history.length - 1];
+  // Standings source: the active round if one exists, otherwise the most
+  // recently completed round (round just ended / game just ended).
+  const sourceStates = currentRound
+    ? currentRound.player_states
+    : (roundHistory.length ? roundHistory[roundHistory.length - 1].player_states : {});
 
-  const winner = state.players.find(p => p.player_id === state.winner_id);
-  document.getElementById('game-over-winner').innerHTML =
-    winner ? `<p class="winner-name">👑 ${escHtml(winner.name)} wins!</p>` : '';
-
-  const scoresEl = document.getElementById('game-over-scores');
-  scoresEl.innerHTML = '';
-
-  const sorted = state.players
-    .map(p => ({ ...p, total: lastRound?.player_states[p.player_id]?.total_score ?? 0 }))
+  const standings = state.players
+    .map(p => ({ ...p, total: sourceStates[p.player_id]?.total_score ?? 0 }))
     .sort((a, b) => b.total - a.total);
 
-  sorted.forEach((p, i) => {
-    const row = document.createElement('div');
-    row.className = 'score-row';
-    row.innerHTML = `<span>${i + 1}. ${escHtml(p.name)}</span><span><strong>${p.total} pts</strong></span>`;
-    scoresEl.appendChild(row);
-  });
+  document.getElementById('scoreboard-panel-this-game').innerHTML = standings.map((p, i) => `
+    <div class="score-row ${p.player_id === state.your_player_id ? 'is-me' : ''}">
+      <span>${i === 0 ? '👑 ' : ''}${escHtml(p.name)}${p.player_id === state.your_player_id ? ' <span class="you-tag">YOU</span>' : ''}</span>
+      <span><strong>${p.total}</strong></span>
+    </div>
+  `).join('');
 
-  showScreen('screen-game-over');
+  // "Overall" — games won this room. The tab only appears once at least
+  // one rematch has happened, since there's nothing to tally before that.
+  const overallTab = document.getElementById('scoreboard-tab-overall');
+  const winCounts = calculateWinCounts(state);
+  if (matchHistory.length === 0) {
+    overallTab.classList.add('hidden');
+    if (scoreboardTab === 'overall') showScoreboardTab('this-game');
+  } else {
+    overallTab.classList.remove('hidden');
+    const tallySorted = state.players
+      .map(p => ({ ...p, wins: winCounts[p.player_id] || 0 }))
+      .sort((a, b) => b.wins - a.wins);
+
+    document.getElementById('scoreboard-panel-overall').innerHTML = tallySorted.map((p, i) => `
+      <div class="score-row ${p.player_id === state.your_player_id ? 'is-me' : ''}">
+        <span>${i === 0 && p.wins > 0 ? '👑 ' : ''}${escHtml(p.name)}${p.player_id === state.your_player_id ? ' <span class="you-tag">YOU</span>' : ''}</span>
+        <span>${p.wins}<span class="sub">win${p.wins !== 1 ? 's' : ''}</span></span>
+      </div>
+    `).join('');
+  }
+
+  // Leader callout in the header.
+  const leaderEl = document.getElementById('scoreboard-leader');
+  if (scoreboardTab === 'overall' && matchHistory.length > 0) {
+    const top = [...state.players].sort((a, b) => (winCounts[b.player_id] || 0) - (winCounts[a.player_id] || 0))[0];
+    leaderEl.textContent = top ? `— ${top.name} leads, ${winCounts[top.player_id] || 0}` : '';
+  } else if (standings.length) {
+    leaderEl.textContent = `— ${standings[0].name} leads, ${standings[0].total}`;
+  } else {
+    leaderEl.textContent = '';
+  }
+
+  // Card highlight + actions row.
+  const card    = document.getElementById('scoreboard-card');
+  const actions = document.getElementById('scoreboard-actions');
+  card.classList.toggle('is-round-end', opts.phase === 'round-end');
+  card.classList.toggle('is-game-over', opts.phase === 'game-over');
+
+  if (opts.phase === 'game-over') {
+    actions.classList.add('active');
+    actions.innerHTML = state.is_host
+      ? '<button class="btn btn-gold" onclick="sendRematch()">🔁 Play Again (Same Room)</button><button class="btn btn-ghost" onclick="resetToLobby()">Leave Room</button>'
+      : '<p class="hint">Waiting for the host to start a new game…</p><button class="btn btn-ghost" onclick="resetToLobby()">Leave Room</button>';
+  } else if (opts.phase === 'round-end') {
+    actions.classList.add('active');
+    actions.innerHTML = state.is_host
+      ? '<button class="btn btn-primary" onclick="sendStartRound()">▶ Start Next Round</button>'
+      : '<p class="hint">Waiting for the host to start the next round…</p>';
+  } else {
+    actions.classList.remove('active');
+    actions.innerHTML = '';
+  }
+}
+
+async function sendRematch() {
+  try {
+    const res = await fetch(`/api/rooms/${myGameId}/rematch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ player_id: myPlayerId }),
+    });
+    if (!res.ok) {
+      const detail = (await res.json()).detail || res.statusText;
+      showError('game-error', `Could not start rematch: ${detail}`);
+    }
+  } catch (err) {
+    showError('game-error', `Error: ${err.message}`);
+  }
 }
 
 // =============================================================================
@@ -702,7 +841,7 @@ function cardHtml(card) {
     return (
       `<div class="f7-tcard ${variantClass}">` +
       `<div class="f7-tcard-cap">${caption}</div>` +
-      `<div class="f7-tcard-chip" style="font-size:0.6rem;">${label}</div>` +
+      `<div class="f7-tcard-chip" style="font-size:0.9rem;">${label}</div>` +
       `<div class="f7-tcard-cap">Instant Action</div>` +
       `</div>`
     );
@@ -769,4 +908,31 @@ document.addEventListener('DOMContentLoaded', () => {
       if (e.key === 'Enter') handleJoinOrCreate();
     });
   });
+
+  paintFeltGrain();
 });
+
+/**
+ * Procedural fabric grain for the felt table background — generates a small
+ * noise tile on an off-screen canvas and applies it as a repeating CSS
+ * background on #grainLayer, instead of shipping an image asset.
+ */
+function paintFeltGrain() {
+  const w = 160, h = 160;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+
+  const imageData = ctx.createImageData(w, h);
+  for (let i = 0; i < imageData.data.length; i += 4) {
+    const v = 128 + (Math.random() - 0.5) * 90;
+    imageData.data[i] = v;
+    imageData.data[i + 1] = v;
+    imageData.data[i + 2] = v;
+    imageData.data[i + 3] = 255;
+  }
+  ctx.putImageData(imageData, 0, 0);
+
+  document.getElementById('grainLayer').style.backgroundImage = `url(${canvas.toDataURL()})`;
+}
